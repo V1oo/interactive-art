@@ -38,9 +38,16 @@ const pulseAmount = 0.04; // scale +/- %
 const pulseHz = 0.75; // cycles/sec
 const baseScale = 1;
 
+// Organic motion (subtle)
+const rotationStrength = 0.12; // how much velocity affects rotation
+const stretchAmount = 0.06; // max stretch along movement (6%)
+const squashAmount = 0.03; // max squash perpendicular (3%)
+const speedForMaxStretch = 180; // speed at which stretch is maxed
+
 // Physics state
 const followPos = { x: ball.x, y: ball.y };
 const velocity = { x: 0, y: 0 };
+let smoothedSpeed = 0;
 
 let t = 0;
 app.ticker.add((ticker) => {
@@ -63,24 +70,36 @@ app.ticker.add((ticker) => {
   velocity.y *= damp;
 
   // Clamp speed for stability
-  const speed = Math.hypot(velocity.x, velocity.y);
+  let speed = Math.hypot(velocity.x, velocity.y);
   if (speed > maxSpeed) {
     const scale = maxSpeed / speed;
     velocity.x *= scale;
     velocity.y *= scale;
+    speed = maxSpeed;
   }
 
   // Integrate velocity into position
   followPos.x += velocity.x * dt;
   followPos.y += velocity.y * dt;
 
-  // Subtle floating + pulsing layered on top
+  // Subtle floating
   const floatOffset = Math.sin(t * Math.PI * 2 * floatHz) * floatAmplitude;
   ball.position.set(followPos.x, followPos.y + floatOffset);
 
+  // Organic motion: rotation + squash/stretch from velocity
+  smoothedSpeed += (speed - smoothedSpeed) * 0.12;
+
+  const speedFactor = Math.min(smoothedSpeed / speedForMaxStretch, 1);
+
+  // Slight rotation in movement direction (fades when slowing)
+  ball.rotation = Math.atan2(velocity.y, velocity.x) * rotationStrength * speedFactor;
+
+  // Squash and stretch: elongate along movement, compress perpendicular
+  const stretch = speedFactor * stretchAmount;
+  const squash = speedFactor * squashAmount;
   const pulse = Math.sin(t * Math.PI * 2 * pulseHz) * pulseAmount;
-  const s = baseScale * (1 + pulse);
-  ball.scale.set(s);
+  const base = baseScale * (1 + pulse);
+  ball.scale.set(base * (1 + stretch), base * (1 - squash));
 });
 
 window.addEventListener("resize", () => {
