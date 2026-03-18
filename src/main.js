@@ -26,26 +26,53 @@ app.stage.on("pointermove", (e) => {
   target.y = e.global.y;
 });
 
-// Motion tuning
-const followLerp = 0.10; // lower = smoother/slower, higher = snappier
+// Physics tuning
+const attractionStrength = 0.9; // pull toward mouse (higher = snappier)
+const damping = 0.92; // friction (lower = heavier, more resistance)
+const maxSpeed = 420; // cap velocity for stability
+
+// Visual effects
 const floatAmplitude = 10; // px
 const floatHz = 0.55; // cycles/sec
 const pulseAmount = 0.04; // scale +/- %
 const pulseHz = 0.75; // cycles/sec
 const baseScale = 1;
 
-// Keep a stable base position (mouse-follow) separate from float offset.
+// Physics state
 const followPos = { x: ball.x, y: ball.y };
+const velocity = { x: 0, y: 0 };
 
 let t = 0;
 app.ticker.add((ticker) => {
-  // ticker.deltaMS is in milliseconds; normalize to seconds
   const dt = ticker.deltaMS / 1000;
   t += dt;
 
-  // Smooth follow (lerp) toward pointer
-  followPos.x += (target.x - followPos.x) * followLerp;
-  followPos.y += (target.y - followPos.y) * followLerp;
+  // Acceleration toward mouse (spring-like pull)
+  const dx = target.x - followPos.x;
+  const dy = target.y - followPos.y;
+  const ax = dx * attractionStrength;
+  const ay = dy * attractionStrength;
+
+  // Apply acceleration to velocity
+  velocity.x += ax * dt;
+  velocity.y += ay * dt;
+
+  // Damping (friction) - frame-rate independent
+  const damp = Math.pow(damping, dt);
+  velocity.x *= damp;
+  velocity.y *= damp;
+
+  // Clamp speed for stability
+  const speed = Math.hypot(velocity.x, velocity.y);
+  if (speed > maxSpeed) {
+    const scale = maxSpeed / speed;
+    velocity.x *= scale;
+    velocity.y *= scale;
+  }
+
+  // Integrate velocity into position
+  followPos.x += velocity.x * dt;
+  followPos.y += velocity.y * dt;
 
   // Subtle floating + pulsing layered on top
   const floatOffset = Math.sin(t * Math.PI * 2 * floatHz) * floatAmplitude;
