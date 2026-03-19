@@ -30,7 +30,7 @@ app.stage.addChild(water);
 const displacementSprite = new Sprite(noiseTexture);
 
 // обязательно для repeat
-displacementSprite.texture.source.wrapMode = "repeat";
+displacementSprite.texture.source.style.addressMode = "repeat";
 
 // масштаб шума
 displacementSprite.scale.set(2);
