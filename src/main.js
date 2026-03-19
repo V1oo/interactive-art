@@ -12,8 +12,8 @@ await app.init({ resizeTo: window, backgroundColor: BACKGROUND_COLOR });
 document.body.appendChild(app.canvas);
 
 const [waterTexture, noiseTexture] = await Promise.all([
-  Assets.load("/assets/images/water.png"),
-  Assets.load("/assets/images/noise.png"),
+  Assets.load("/.assets/images/water.png"),
+  Assets.load("./assets/images/noise.png"),
 ]);
 
 const water = new Sprite(waterTexture);
