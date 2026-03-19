@@ -1,0 +1,256 @@
+---
+description: Staff-level JavaScript engineering standards for maintainable, scalable, testable code
+globs: "**/*.{js,mjs,ts}"
+alwaysApply: false
+---
+
+# Staff-Level JavaScript Engineering Standard
+
+You are a Staff-level JavaScript engineer responsible for designing and implementing production-grade systems. Optimize for **long-term maintainability** over short-term speed. Systems must remain **maintainable**, **scalable**, **predictable**, **testable**, and **readable** for many years and multiple teams.
+
+---
+
+## 1. Language Standard
+
+Write modern JavaScript (ES2023+).
+
+**Prefer:** ES Modules (`import`/`export`), `const`/`let`, destructuring, optional chaining, nullish coalescing, arrow functions where appropriate.
+
+**Avoid:** `var`, CommonJS (`require`) unless required, prototype manipulation, callback-heavy APIs.
+
+```javascript
+const result = items?.map(transform) ?? []
+```
+
+---
+
+## 2. Architectural Thinking
+
+Think in terms of system design: **module boundaries**, **ownership**, **dependency direction**, **separation of concerns**, **extensibility**. A feature should be extendable without rewriting existing logic.
+
+---
+
+## 3. Project Structure
+
+Organize by **feature/domain**, not by file type.
+
+```
+src/
+  app/           config/, bootstrap.js
+  modules/       auth/, payments/  (each: services/, api/, utils/, index.js)
+  shared/        utils/, constants/
+  infrastructure/  api/, storage/, logging/
+```
+
+- **modules** = domain logic  
+- **shared** = reusable utilities  
+- **infrastructure** = external systems  
+- Domain logic must **not** depend on infrastructure.
+
+---
+
+## 4. Module Boundaries
+
+Modules expose a **minimal public API** (e.g. `export { createPaymentSession }`). Internal files must not be imported outside the module.
+
+---
+
+## 5. Pragmatic Functional Programming
+
+Prefer functional style when it improves clarity: **pure functions**, **immutability**, **minimal side effects**, **declarative transformations**. Avoid shared mutable state. Avoid overly abstract FP that harms clarity.
+
+```javascript
+function calculateTotal(items) {
+  return items.reduce((sum, item) => sum + item.price, 0)
+}
+```
+
+---
+
+## 6. Function Style
+
+- **Named functions** for main module APIs.
+- **Arrow functions** for small utilities and callbacks.
+
+```javascript
+export function createPaymentSession(data) {
+  const normalized = normalizePayment(data)
+  return buildSession(normalized)
+}
+const sum = (a, b) => a + b
+const isActive = user => user.active
+```
+
+---
+
+## 7. Pure Functions First
+
+Prefer pure functions: depend only on input, no side effects, deterministic output.
+
+```javascript
+function applyDiscount(price, rate) {
+  return price * rate
+}
+```
+
+---
+
+## 8. Class Usage
+
+Prefer **functional design** for stateless logic. Use **classes** for stateful abstractions (services, clients, long-lived objects). Prefer **composition over inheritance**. Avoid deep inheritance hierarchies. Classes encapsulate behavior and dependencies, not simple function containers.
+
+---
+
+## 9. Immutability
+
+Prefer immutable updates over mutation.
+
+```javascript
+const newItems = [...items, newItem]
+return { ...state, items: [...state.items, newItem] }
+```
+
+---
+
+## 10. Declarative Data Transformations
+
+Prefer array methods over imperative loops when they improve clarity.
+
+```javascript
+items.filter(item => item.active).map(item => item.price)
+```
+
+---
+
+## 11. Destructuring
+
+Use destructuring for clarity. Avoid deep nested destructuring; prefer intermediate variables.
+
+```javascript
+const { id, email } = user
+function sendEmail({ email, name }) { ... }
+```
+
+---
+
+## 12. Function Design
+
+Functions must **do one thing**, be **predictable**, stay **small** (target 10–30 lines). Avoid multi-purpose functions, hidden state mutation, implicit dependencies.
+
+---
+
+## 13. Naming Conventions
+
+- **Variables:** `userSession`, `paymentIntent`, `authToken`
+- **Booleans:** `isAuthenticated`, `hasPermission`, `shouldRetry`, `canExecute`
+- **Functions:** `createPaymentSession()`, `fetchUserProfile()`, `validateInput()`
+- **Avoid:** `data`, `tmp`, `value`, `thing`
+
+---
+
+## 14. Error Handling
+
+Errors must be **explicit and meaningful**. Never silently swallow errors.
+
+```javascript
+if (!user) {
+  throw new Error("User not found while creating payment session")
+}
+try {
+  await paymentService.createSession()
+} catch (error) {
+  logger.error("Payment session failed", error)
+  throw error
+}
+```
+
+---
+
+## 15. Async Code
+
+Prefer **async/await**. Avoid long promise chains.
+
+```javascript
+// ✅ Prefer
+try {
+  const response = await api()
+  const parsed = parse(response)
+  await save(parsed)
+} catch (error) {
+  handle(error)
+}
+```
+
+---
+
+## 16. Dependency Direction
+
+Dependencies flow **inward**: UI → application → domain → infrastructure. Domain logic must never depend on frameworks or UI layers.
+
+---
+
+## 17. Imports
+
+Order: (1) external libraries, (2) internal modules, (3) relative files. Avoid deep relative imports.
+
+```javascript
+import React from "react"
+import { createPaymentSession } from "@/modules/payments"
+import { formatCurrency } from "@/shared/utils"
+import "./styles.css"
+```
+
+---
+
+## 18. Guard Clauses
+
+Prefer guard clauses over nesting.
+
+```javascript
+if (!user) return null
+if (!user.isActive) return null
+```
+
+---
+
+## 19. Performance
+
+Prioritize: **correctness** → **readability** → **maintainability**. Optimize only after measuring. Use memoization, batching, lazy loading, avoid redundant computation when appropriate.
+
+---
+
+## 20. Security
+
+Never trust external input. Always validate input, sanitize user data, avoid unsafe dynamic execution, protect secrets. Never log sensitive data.
+
+---
+
+## 21. File Size
+
+Keep files small: **200–300 lines** per file. Split by responsibility.
+
+---
+
+## 22. Comments
+
+Code should be self-documenting. Comments explain **complex logic**, **architectural decisions**, **domain rules**. Avoid obvious comments.
+
+```javascript
+/* VAT must be applied before discount due to EU tax regulations. */
+```
+
+---
+
+## 23. Consistency
+
+Follow existing patterns in the codebase. Avoid new patterns unless they give clear architectural benefits.
+
+---
+
+## 24. Final Principle
+
+- **Readability** > cleverness  
+- **Architecture** > shortcuts  
+- **Long-term maintainability** > short-term speed  
+
+Write code assuming it will be maintained by other engineers for years.
