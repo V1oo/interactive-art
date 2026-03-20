@@ -29,6 +29,33 @@ const WATER_LAYER_CONFIG = [
 
 const BACKGROUND_COLOR = 0x000000;
 
+/** Higher = filter scale snaps to target faster (per second, exponential). */
+const FILTER_SCALE_SMOOTHING_LAMBDA = 12;
+
+/**
+ * World-space size of one full repeat of the displacement texture.
+ * Wrapping by raw texture width was wrong when the noise sprite is scaled — period
+ * must match texture size × scale or the field jumps when scroll resets.
+ */
+function getDisplacementWrapPeriods(displacementSprite) {
+  const texture = displacementSprite.texture;
+  const sx = Math.abs(displacementSprite.scale.x);
+  const sy = Math.abs(displacementSprite.scale.y);
+  return {
+    periodX: Math.max(texture.width * sx, 1e-6),
+    periodY: Math.max(texture.height * sy, 1e-6),
+  };
+}
+
+function wrapPositive(value, period) {
+  if (period <= 0) return value;
+  let v = value % period;
+  if (v < 0) v += period;
+  /* Reduce float edge flicker at period boundary */
+  if (v >= period - 1e-5) return 0;
+  return v;
+}
+
 function collectUniqueAssetPaths(layerConfig) {
   const paths = new Set();
   for (const layer of layerConfig) {
@@ -74,20 +101,37 @@ function createWaterLayers(app, layerConfig, texturesByPath) {
     layers.push({
       water,
       displacementSprite,
+      displacementFilter,
       speedX: cfg.speedX,
       speedY: cfg.speedY ?? 0,
+      scrollOffsetX: 0,
+      scrollOffsetY: 0,
+      centerX: 0,
+      centerY: 0,
+      targetDisplacementScaleX: scale.x,
+      targetDisplacementScaleY: scale.y,
+      smoothedScaleX: scale.x,
+      smoothedScaleY: scale.y,
     });
   }
   return layers;
 }
 
 function updateWaterLayout(layers, screenWidth, screenHeight) {
+  const cx = screenWidth / 2;
+  const cy = screenHeight / 2;
   for (const layer of layers) {
     const { water, displacementSprite } = layer;
+    layer.centerX = cx;
+    layer.centerY = cy;
     const waterScale = screenWidth / water.texture.width;
     water.scale.set(waterScale);
     water.position.set(0, screenHeight);
-    displacementSprite.position.set(screenWidth / 2, screenHeight / 2);
+    const { periodX, periodY } = getDisplacementWrapPeriods(displacementSprite);
+    displacementSprite.position.set(
+      cx + wrapPositive(layer.scrollOffsetX, periodX),
+      cy + wrapPositive(layer.scrollOffsetY, periodY),
+    );
   }
 }
 
@@ -112,8 +156,32 @@ updateLayout();
 window.addEventListener("resize", updateLayout);
 
 app.ticker.add(() => {
+  const deltaTime = app.ticker.deltaTime;
+  const deltaSeconds = app.ticker.deltaMS / 1000;
+  const filterT = 1 - Math.exp(-FILTER_SCALE_SMOOTHING_LAMBDA * deltaSeconds);
+
   for (const layer of layers) {
-    layer.displacementSprite.x += layer.speedX;
-    layer.displacementSprite.y += layer.speedY;
+    const { displacementSprite, displacementFilter } = layer;
+    const { periodX, periodY } = getDisplacementWrapPeriods(displacementSprite);
+
+    layer.scrollOffsetX = wrapPositive(
+      layer.scrollOffsetX + layer.speedX * deltaTime,
+      periodX,
+    );
+    layer.scrollOffsetY = wrapPositive(
+      layer.scrollOffsetY + layer.speedY * deltaTime,
+      periodY,
+    );
+
+    layer.smoothedScaleX +=
+      (layer.targetDisplacementScaleX - layer.smoothedScaleX) * filterT;
+    layer.smoothedScaleY +=
+      (layer.targetDisplacementScaleY - layer.smoothedScaleY) * filterT;
+    displacementFilter.scale.set(layer.smoothedScaleX, layer.smoothedScaleY);
+
+    displacementSprite.position.set(
+      layer.centerX + layer.scrollOffsetX,
+      layer.centerY + layer.scrollOffsetY,
+    );
   }
 });
