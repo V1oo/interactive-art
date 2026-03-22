@@ -269,12 +269,12 @@ async function loadThreeBackgroundLayers() {
   }
 
   function makeLayerMaterial(map) {
-    return new THREE.MeshBasicMaterial({
+    return new THREE.MeshLambertMaterial({
       map,
+      flatShading: true,
       transparent: true,
       depthWrite: false,
       side: THREE.DoubleSide,
-      toneMapped: false,
     });
   }
 
@@ -296,31 +296,27 @@ async function loadThreeBackgroundLayers() {
   threeParticles = createUpperSkyParticles();
   threeScene.add(threeParticles);
 
-  threeScene.add(new THREE.AmbientLight(0xffffff, 0.55));
-  const keyLight = new THREE.DirectionalLight(0xffffff, 0.95);
-  keyLight.position.set(3, 5, 8);
-  threeScene.add(keyLight);
-  const fillLight = new THREE.DirectionalLight(0xb8dcff, 0.4);
-  fillLight.position.set(-4, 2, 5);
-  threeScene.add(fillLight);
+  threeScene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  const mainDirLight = new THREE.DirectionalLight(0xffffff, 0.4);
+  mainDirLight.position.set(4, 10, 6);
+  threeScene.add(mainDirLight);
 
   const sphereGeometry = new THREE.SphereGeometry(0.58, 48, 32);
 
   const outlineMesh = new THREE.Mesh(
     sphereGeometry,
-    new THREE.MeshBasicMaterial({
+    new THREE.MeshLambertMaterial({
       color: 0x06222a,
+      flatShading: true,
       side: THREE.BackSide,
     }),
   );
   outlineMesh.scale.setScalar(1.032);
   outlineMesh.renderOrder = 10;
 
-  const sphereMaterial = new THREE.MeshStandardMaterial({
+  const sphereMaterial = new THREE.MeshLambertMaterial({
     color: 0x2f7f7f,
     flatShading: true,
-    roughness: 1,
-    metalness: 0,
   });
   const coreMesh = new THREE.Mesh(sphereGeometry, sphereMaterial);
   coreMesh.renderOrder = 10;
@@ -336,6 +332,17 @@ async function loadThreeBackgroundLayers() {
   cubeRoot.traverse((o) => {
     if (o.isMesh) {
       o.renderOrder = 10;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      const next = mats.map((mat) => {
+        return new THREE.MeshLambertMaterial({
+          map: mat.map ?? null,
+          flatShading: true,
+          color: mat.color ? mat.color.clone() : new THREE.Color(0xffffff),
+          transparent: mat.transparent === true,
+          opacity: mat.opacity ?? 1,
+        });
+      });
+      o.material = next.length === 1 ? next[0] : next;
     }
   });
   const cubeBox = new THREE.Box3().setFromObject(cubeRoot);
