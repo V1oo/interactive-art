@@ -4,7 +4,12 @@ import {
   Sprite,
   DisplacementFilter,
 } from "https://cdn.jsdelivr.net/npm/pixi.js@8/dist/pixi.mjs";
-import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js";
+import * as THREE from "three";
+import { EffectComposer } from "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/postprocessing/OutputPass.js";
+import { GLTFLoader } from "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/loaders/GLTFLoader.js";
 
 /** Higher = filter scale snaps to target faster (per second, exponential). */
 const FILTER_SCALE_SMOOTHING_LAMBDA = 12;
@@ -143,8 +148,14 @@ const threeBgLayers = [];
 /** Demo sphere group in front of billboard layers (thin outline + core). */
 let threeSphere = null;
 
+/** Loaded GLB (cube) to the right of the sphere. */
+let threeCube = null;
+
 /** Soft particles in the upper sky (Three.js). */
 let threeParticles = null;
+
+/** Postprocessing (bloom). */
+let threeComposer = null;
 
 const THREE_SKY_PARTICLE_COUNT = 220;
 
@@ -320,6 +331,28 @@ async function loadThreeBackgroundLayers() {
   threeSphere.renderOrder = 10;
   threeScene.add(threeSphere);
 
+  const gltf = await new GLTFLoader().loadAsync("./assets/models/cube.glb");
+  const cubeRoot = gltf.scene;
+  cubeRoot.traverse((o) => {
+    if (o.isMesh) {
+      o.renderOrder = 10;
+    }
+  });
+  const cubeBox = new THREE.Box3().setFromObject(cubeRoot);
+  const cubeCenter = new THREE.Vector3();
+  const cubeSize = new THREE.Vector3();
+  cubeBox.getCenter(cubeCenter);
+  cubeBox.getSize(cubeSize);
+  cubeRoot.position.sub(cubeCenter);
+  const cubeMax = Math.max(cubeSize.x, cubeSize.y, cubeSize.z, 1e-6);
+  const cubePivot = new THREE.Group();
+  cubePivot.scale.setScalar(0.55 / cubeMax);
+  cubePivot.add(cubeRoot);
+  cubePivot.position.set(0.88, 0, 1.05);
+  cubePivot.renderOrder = 10;
+  threeScene.add(cubePivot);
+  threeCube = cubePivot;
+
   threeBgLayers.push(
     { mesh: far, texAspect: texFar.image.width / texFar.image.height },
     { mesh: mid, texAspect: texMid.image.width / texMid.image.height },
@@ -329,6 +362,17 @@ async function loadThreeBackgroundLayers() {
 }
 
 await loadThreeBackgroundLayers();
+
+threeComposer = new EffectComposer(threeRenderer);
+threeComposer.addPass(new RenderPass(threeScene, threeCamera));
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, Math.max(window.innerHeight, 1)),
+  0.38,
+  0.45,
+  0.82,
+);
+threeComposer.addPass(bloomPass);
+threeComposer.addPass(new OutputPass());
 
 let threeMouseX = 0;
 let threeMouseY = 0;
@@ -348,6 +392,10 @@ function resizeThree() {
   threeCamera.aspect = w / h;
   threeCamera.updateProjectionMatrix();
   updateThreeBgPlaneSizes();
+  if (threeComposer) {
+    threeComposer.setSize(w, h);
+    threeComposer.setPixelRatio(threeRenderer.getPixelRatio());
+  }
 }
 
 function applyWaterSpritePosition(layer) {
@@ -496,7 +544,11 @@ app.ticker.add(() => {
 
   tickThreeParticles(deltaSeconds, sceneTime);
 
-  threeRenderer.render(threeScene, threeCamera);
+  if (threeComposer) {
+    threeComposer.render(deltaSeconds);
+  } else {
+    threeRenderer.render(threeScene, threeCamera);
+  }
 
   for (const pl of foregroundLayers) {
     pl.sprite.rotation = Math.sin(sceneTime) * 0.02;
