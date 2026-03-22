@@ -298,7 +298,7 @@ async function loadThreeBackgroundLayers() {
 
   threeScene.add(new THREE.AmbientLight(0xffffff, 0.6));
   const mainDirLight = new THREE.DirectionalLight(0xffffff, 0.4);
-  mainDirLight.position.set(4, 10, 6);
+  mainDirLight.position.set(2, 2, 2);
   threeScene.add(mainDirLight);
 
   const sphereGeometry = new THREE.SphereGeometry(0.58, 48, 32);
@@ -326,6 +326,24 @@ async function loadThreeBackgroundLayers() {
   threeSphere.position.set(0, 0, 1.05);
   threeSphere.renderOrder = 10;
   threeScene.add(threeSphere);
+
+  const fakeShadowMaterial = new THREE.MeshBasicMaterial({
+    color: 0x000000,
+    transparent: true,
+    opacity: 0.2,
+    depthWrite: false,
+  });
+  function addFakeShadowUnderObject(x, z, radius, y, scaleXZ) {
+    const geo = new THREE.CircleGeometry(radius, 40);
+    geo.rotateX(-Math.PI / 2);
+    const plane = new THREE.Mesh(geo, fakeShadowMaterial);
+    plane.position.set(x, y, z);
+    plane.scale.set(scaleXZ[0], 1, scaleXZ[1]);
+    plane.renderOrder = 8;
+    threeScene.add(plane);
+    return plane;
+  }
+  addFakeShadowUnderObject(0, 1.05, 0.38, -0.66, [1.28, 0.5]);
 
   const gltf = await new GLTFLoader().loadAsync("./assets/models/cube.glb");
   const cubeRoot = gltf.scene;
@@ -359,6 +377,15 @@ async function loadThreeBackgroundLayers() {
   cubePivot.renderOrder = 10;
   threeScene.add(cubePivot);
   threeCube = cubePivot;
+
+  const cubeBounds = new THREE.Box3().setFromObject(cubePivot);
+  addFakeShadowUnderObject(
+    cubePivot.position.x,
+    cubePivot.position.z,
+    0.3,
+    cubeBounds.min.y - 0.04,
+    [1.15, 0.46],
+  );
 
   threeBgLayers.push(
     { mesh: far, texAspect: texFar.image.width / texFar.image.height },
