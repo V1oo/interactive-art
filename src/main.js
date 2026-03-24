@@ -120,6 +120,9 @@ threeCamera.position.z = 5;
 
 const textureLoader = new THREE.TextureLoader();
 
+const flowerRaycaster = new THREE.Raycaster();
+const flowerPointerNdc = new THREE.Vector2();
+
 const THREE_BG_PATHS = {
   far: "./assets/images/main-bg.png",
   mid: "./assets/images/mid-bg.png",
@@ -132,7 +135,7 @@ const threeBgLayers = [];
 /** Soft particles in the upper sky (Three.js). */
 let threeParticles = null;
 
-/** GLB flower pivot (slow Y rotation in ticker). */
+/** GLB flower pivot; `userData.breathTarget` = upper pivot for breathing. */
 let threeFlower = null;
 
 /** Ground plane texture (Three.js). */
@@ -144,6 +147,30 @@ let threeComposer = null;
 const THREE_SKY_PARTICLE_COUNT = 220;
 
 const THREE_GROUND_Z = 0.62;
+
+/** Y-spin when toggled by click (rad/s). */
+const FLOWER_SPIN_SPEED = 0.35;
+
+/** World Y offset of the flower (lower = further down on screen). */
+const FLOWER_PIVOT_Y = -1.35;
+
+/** Invisible hit sphere radius multiplier vs bounding sphere of the flower. */
+const FLOWER_HIT_RADIUS_MULT = 1.75;
+
+/** Stem = lower part by height; upper part gets breathing (mesh center Y). */
+const FLOWER_STEM_SPLIT = 0.36;
+
+/** Subtle motion on upper part only; pivot at stem/top junction. */
+const FLOWER_BREATH = {
+  scaleAmp: 0.02,
+  offsetY: 0.006,
+  offsetX: 0.008,
+  offsetZ: 0.005,
+  leanX: 0.045,
+  leanZ: 0.03,
+  freqBreath: 1.55,
+  freqSway: 1.05,
+};
 
 /**
  * Light scale on top of contain — a bit of texture may clip at the edges
@@ -331,14 +358,79 @@ async function loadThreeBackgroundLayers() {
   flowerBox.getCenter(flowerCenter);
   flowerBox.getSize(flowerSize);
   flowerRoot.position.sub(flowerCenter);
+  flowerBox.setFromObject(flowerRoot);
+  flowerRoot.position.y -= flowerBox.min.y;
+
   const flowerMax = Math.max(flowerSize.x, flowerSize.y, flowerSize.z, 1e-6);
   const flowerPivot = new THREE.Group();
   flowerPivot.scale.setScalar((0.55 * 4) / flowerMax);
-  flowerPivot.add(flowerRoot);
-  flowerPivot.position.set(0, 0, 1.05);
+
+  const flowerMotion = new THREE.Group();
+  flowerBox.setFromObject(flowerRoot);
+  const stemH = flowerBox.max.y - flowerBox.min.y;
+  const splitY = flowerBox.min.y + stemH * FLOWER_STEM_SPLIT;
+
+  const stemGroup = new THREE.Group();
+  const topPivot = new THREE.Group();
+  topPivot.position.set(0, splitY, 0);
+  const topGroup = new THREE.Group();
+  topPivot.add(topGroup);
+
+  const meshList = [];
+  flowerRoot.traverse((o) => {
+    if (o.isMesh) meshList.push(o);
+  });
+
+  for (const mesh of meshList) {
+    const mb = new THREE.Box3().setFromObject(mesh);
+    const mc = new THREE.Vector3();
+    mb.getCenter(mc);
+    if (mc.y < splitY) {
+      stemGroup.attach(mesh);
+    } else {
+      topGroup.attach(mesh);
+    }
+  }
+
+  if (topGroup.children.length === 0 && stemGroup.children.length > 0) {
+    while (stemGroup.children.length) {
+      topGroup.attach(stemGroup.children[0]);
+    }
+  }
+
+  flowerMotion.add(stemGroup, topPivot);
+  flowerPivot.add(flowerMotion);
+  flowerPivot.position.set(0, FLOWER_PIVOT_Y, 1.05);
   flowerPivot.renderOrder = 10;
   threeScene.add(flowerPivot);
   threeFlower = flowerPivot;
+  threeFlower.userData.breathTarget = topPivot;
+  threeFlower.userData.flowerSplitY = splitY;
+
+  const hitMat = new THREE.MeshBasicMaterial({
+    color: 0x000000,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    depthTest: true,
+  });
+  flowerPivot.updateMatrixWorld(true);
+  const hb = new THREE.Box3().setFromObject(flowerPivot);
+  const hCenter = new THREE.Vector3();
+  const hSize = new THREE.Vector3();
+  hb.getCenter(hCenter);
+  hb.getSize(hSize);
+  const hitR =
+    Math.max(hSize.x, hSize.y, hSize.z) * 0.5 * FLOWER_HIT_RADIUS_MULT;
+  const hitMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(hitR, 20, 16),
+    hitMat,
+  );
+  const hitLocal = hCenter.clone();
+  flowerPivot.worldToLocal(hitLocal);
+  hitMesh.position.copy(hitLocal);
+  hitMesh.renderOrder = 11;
+  flowerPivot.add(hitMesh);
 
   const texGround = await textureLoader.loadAsync("./assets/images/plane.png");
   texGround.colorSpace = THREE.SRGBColorSpace;
@@ -441,6 +533,21 @@ Object.assign(app.canvas.style, {
 });
 document.body.appendChild(app.canvas);
 
+app.canvas.addEventListener("pointerdown", (e) => {
+  if (!threeFlower) return;
+  const w = window.innerWidth;
+  const h = Math.max(window.innerHeight, 1);
+  flowerPointerNdc.x = (e.clientX / w) * 2 - 1;
+  flowerPointerNdc.y = -(e.clientY / h) * 2 + 1;
+  flowerRaycaster.setFromCamera(flowerPointerNdc, threeCamera);
+  const hits = flowerRaycaster.intersectObject(threeFlower, true);
+  if (hits.length > 0) {
+    flowerSpinEnabled = !flowerSpinEnabled;
+    e.preventDefault();
+    e.stopPropagation();
+  }
+});
+
 const texturesByPath = await loadTexturesByPath(collectAllTexturePaths());
 
 const waterLayers = [];
@@ -489,6 +596,9 @@ for (const layer of waterLayers) {
 
 let sceneTime = 0;
 
+/** Click flower to toggle spin (Pixi canvas raycast → Three scene). */
+let flowerSpinEnabled = false;
+
 function updateWaterLayout(screenWidth, screenHeight) {
   const cx = screenWidth / 2;
   const cy = screenHeight / 2;
@@ -534,7 +644,26 @@ app.ticker.add(() => {
   updateThreeGroundLayout();
 
   if (threeFlower) {
-    threeFlower.rotation.y += deltaSeconds * 0.35;
+    if (flowerSpinEnabled) {
+      threeFlower.rotation.y += deltaSeconds * FLOWER_SPIN_SPEED;
+    }
+    const breathNode = threeFlower.userData.breathTarget;
+    if (breathNode) {
+      const t = sceneTime;
+      const b = FLOWER_BREATH;
+      const breath = Math.sin(t * b.freqBreath);
+      const sway = Math.sin(t * b.freqSway + 0.85);
+      const slow = Math.sin(t * (b.freqSway * 0.47) + 0.2);
+      const baseY = threeFlower.userData.flowerSplitY ?? 0;
+      breathNode.scale.setScalar(1 + breath * b.scaleAmp);
+      breathNode.position.set(
+        sway * b.offsetX,
+        baseY + breath * b.offsetY,
+        slow * b.offsetZ,
+      );
+      breathNode.rotation.x = breath * b.leanX;
+      breathNode.rotation.z = sway * b.leanZ;
+    }
   }
 
   tickThreeParticles(deltaSeconds, sceneTime);
