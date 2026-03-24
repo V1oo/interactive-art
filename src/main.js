@@ -14,7 +14,7 @@ import { GLTFLoader } from "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/
 /** Higher = filter scale snaps to target faster (per second, exponential). */
 const FILTER_SCALE_SMOOTHING_LAMBDA = 12;
 
-/** Water back → front (before foreground trees). Paths relative for GitHub Pages. */
+/** Water back → front (Pixi over Three.js). Paths relative for GitHub Pages. */
 const WATER_LAYER_CONFIG = [
   {
     waterTexturePath: "./assets/images/water-main.png",
@@ -51,11 +51,6 @@ const WATER_LAYER_CONFIG = [
   },
 ];
 
-const FOREGROUND_LAYER_CONFIG = [
-  { texturePath: "./assets/images/tree-base.png" },
-  { texturePath: "./assets/images/tree-head.png" },
-];
-
 function getDisplacementWrapPeriods(displacementSprite) {
   const texture = displacementSprite.texture;
   const sx = Math.abs(displacementSprite.scale.x);
@@ -74,22 +69,11 @@ function wrapPositive(value, period) {
   return v;
 }
 
-function layoutBottomWidth(sprite, w, h, offsetX, offsetY) {
-  const tw = sprite.texture.width;
-  const scale = w / tw;
-  sprite.scale.set(scale);
-  sprite.anchor.set(0, 1);
-  sprite.position.set(offsetX, h + offsetY);
-}
-
 function collectAllTexturePaths() {
   const paths = new Set();
   for (const cfg of WATER_LAYER_CONFIG) {
     paths.add(cfg.waterTexturePath);
     paths.add(cfg.noiseTexturePath);
-  }
-  for (const cfg of FOREGROUND_LAYER_CONFIG) {
-    paths.add(cfg.texturePath);
   }
   return [...paths];
 }
@@ -145,19 +129,21 @@ const THREE_BG_PATHS = {
 /** @type {{ mesh: THREE.Mesh; texAspect: number }[]} */
 const threeBgLayers = [];
 
-/** Demo sphere group in front of billboard layers (thin outline + core). */
-let threeSphere = null;
-
-/** Loaded GLB (cube) to the right of the sphere. */
-let threeCube = null;
-
 /** Soft particles in the upper sky (Three.js). */
 let threeParticles = null;
+
+/** GLB flower pivot (slow Y rotation in ticker). */
+let threeFlower = null;
+
+/** Ground plane texture (Three.js). */
+let threeGroundMesh = null;
 
 /** Postprocessing (bloom). */
 let threeComposer = null;
 
 const THREE_SKY_PARTICLE_COUNT = 220;
+
+const THREE_GROUND_Z = 0.62;
 
 /**
  * Light scale on top of contain — a bit of texture may clip at the edges
@@ -256,6 +242,26 @@ function updateThreeBgPlaneSizes() {
   }
 }
 
+function updateThreeGroundLayout() {
+  if (!threeGroundMesh) return;
+
+  const vFov = (threeCamera.fov * Math.PI) / 180;
+  const cx = threeCamera.position.x;
+  const cy = threeCamera.position.y;
+  const cz = threeCamera.position.z;
+
+  const gZ = THREE_GROUND_Z;
+  const gDist = Math.max(cz - gZ, 0.05);
+  const gViewH = 2 * Math.tan(vFov / 2) * gDist;
+  const gViewW = gViewH * threeCamera.aspect;
+  const bottomY = cy - gViewH / 2;
+  const gAspect = threeGroundMesh.userData.texAspect;
+  const groundW = gViewW * 1.22;
+  const groundD = groundW / gAspect;
+  threeGroundMesh.scale.set(groundW, groundD, 1);
+  threeGroundMesh.position.set(cx, bottomY - 0.04, gZ);
+}
+
 async function loadThreeBackgroundLayers() {
   const [texFar, texMid, texNear] = await Promise.all([
     textureLoader.loadAsync(THREE_BG_PATHS.far),
@@ -301,53 +307,9 @@ async function loadThreeBackgroundLayers() {
   mainDirLight.position.set(2, 2, 2);
   threeScene.add(mainDirLight);
 
-  const sphereGeometry = new THREE.SphereGeometry(0.58, 48, 32);
-
-  const outlineMesh = new THREE.Mesh(
-    sphereGeometry,
-    new THREE.MeshLambertMaterial({
-      color: 0x06222a,
-      flatShading: true,
-      side: THREE.BackSide,
-    }),
-  );
-  outlineMesh.scale.setScalar(1.032);
-  outlineMesh.renderOrder = 10;
-
-  const sphereMaterial = new THREE.MeshLambertMaterial({
-    color: 0x2f7f7f,
-    flatShading: true,
-  });
-  const coreMesh = new THREE.Mesh(sphereGeometry, sphereMaterial);
-  coreMesh.renderOrder = 10;
-
-  threeSphere = new THREE.Group();
-  threeSphere.add(outlineMesh, coreMesh);
-  threeSphere.position.set(0, 0, 1.05);
-  threeSphere.renderOrder = 10;
-  threeScene.add(threeSphere);
-
-  const fakeShadowMaterial = new THREE.MeshBasicMaterial({
-    color: 0x000000,
-    transparent: true,
-    opacity: 0.2,
-    depthWrite: false,
-  });
-  function addFakeShadowUnderObject(x, z, radius, y, scaleXZ) {
-    const geo = new THREE.CircleGeometry(radius, 40);
-    geo.rotateX(-Math.PI / 2);
-    const plane = new THREE.Mesh(geo, fakeShadowMaterial);
-    plane.position.set(x, y, z);
-    plane.scale.set(scaleXZ[0], 1, scaleXZ[1]);
-    plane.renderOrder = 8;
-    threeScene.add(plane);
-    return plane;
-  }
-  addFakeShadowUnderObject(0, 1.05, 0.38, -0.66, [1.28, 0.5]);
-
-  const gltf = await new GLTFLoader().loadAsync("./assets/models/cube.glb");
-  const cubeRoot = gltf.scene;
-  cubeRoot.traverse((o) => {
+  const flowerGltf = await new GLTFLoader().loadAsync("./assets/models/flower.glb");
+  const flowerRoot = flowerGltf.scene;
+  flowerRoot.traverse((o) => {
     if (o.isMesh) {
       o.renderOrder = 10;
       const mats = Array.isArray(o.material) ? o.material : [o.material];
@@ -363,29 +325,44 @@ async function loadThreeBackgroundLayers() {
       o.material = next.length === 1 ? next[0] : next;
     }
   });
-  const cubeBox = new THREE.Box3().setFromObject(cubeRoot);
-  const cubeCenter = new THREE.Vector3();
-  const cubeSize = new THREE.Vector3();
-  cubeBox.getCenter(cubeCenter);
-  cubeBox.getSize(cubeSize);
-  cubeRoot.position.sub(cubeCenter);
-  const cubeMax = Math.max(cubeSize.x, cubeSize.y, cubeSize.z, 1e-6);
-  const cubePivot = new THREE.Group();
-  cubePivot.scale.setScalar(0.55 / cubeMax);
-  cubePivot.add(cubeRoot);
-  cubePivot.position.set(0.88, 0, 1.05);
-  cubePivot.renderOrder = 10;
-  threeScene.add(cubePivot);
-  threeCube = cubePivot;
+  const flowerBox = new THREE.Box3().setFromObject(flowerRoot);
+  const flowerCenter = new THREE.Vector3();
+  const flowerSize = new THREE.Vector3();
+  flowerBox.getCenter(flowerCenter);
+  flowerBox.getSize(flowerSize);
+  flowerRoot.position.sub(flowerCenter);
+  const flowerMax = Math.max(flowerSize.x, flowerSize.y, flowerSize.z, 1e-6);
+  const flowerPivot = new THREE.Group();
+  flowerPivot.scale.setScalar((0.55 * 4) / flowerMax);
+  flowerPivot.add(flowerRoot);
+  flowerPivot.position.set(0, 0, 1.05);
+  flowerPivot.renderOrder = 10;
+  threeScene.add(flowerPivot);
+  threeFlower = flowerPivot;
 
-  const cubeBounds = new THREE.Box3().setFromObject(cubePivot);
-  addFakeShadowUnderObject(
-    cubePivot.position.x,
-    cubePivot.position.z,
-    0.3,
-    cubeBounds.min.y - 0.04,
-    [1.15, 0.46],
+  const texGround = await textureLoader.loadAsync("./assets/images/plane.png");
+  texGround.colorSpace = THREE.SRGBColorSpace;
+  texGround.wrapS = THREE.ClampToEdgeWrapping;
+  texGround.wrapT = THREE.ClampToEdgeWrapping;
+
+  const groundGeo = new THREE.PlaneGeometry(1, 1);
+  threeGroundMesh = new THREE.Mesh(
+    groundGeo,
+    new THREE.MeshLambertMaterial({
+      map: texGround,
+      flatShading: true,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
   );
+  threeGroundMesh.rotation.x = -Math.PI / 2;
+  threeGroundMesh.renderOrder = 3;
+  threeGroundMesh.userData.texAspect =
+    texGround.image.width / texGround.image.height;
+  threeScene.add(threeGroundMesh);
+
+  updateThreeGroundLayout();
 
   threeBgLayers.push(
     { mesh: far, texAspect: texFar.image.width / texFar.image.height },
@@ -426,6 +403,7 @@ function resizeThree() {
   threeCamera.aspect = w / h;
   threeCamera.updateProjectionMatrix();
   updateThreeBgPlaneSizes();
+  updateThreeGroundLayout();
   if (threeComposer) {
     threeComposer.setSize(w, h);
     threeComposer.setPixelRatio(threeRenderer.getPixelRatio());
@@ -464,16 +442,6 @@ Object.assign(app.canvas.style, {
 document.body.appendChild(app.canvas);
 
 const texturesByPath = await loadTexturesByPath(collectAllTexturePaths());
-
-function makeSpriteStack(configs) {
-  const stack = [];
-  for (const cfg of configs) {
-    const sprite = new Sprite(texturesByPath.get(cfg.texturePath));
-    stack.push({ cfg, sprite });
-    app.stage.addChild(sprite);
-  }
-  return stack;
-}
 
 const waterLayers = [];
 for (const cfg of WATER_LAYER_CONFIG) {
@@ -519,15 +487,7 @@ for (const layer of waterLayers) {
   app.stage.addChild(layer.displacementSprite);
 }
 
-const foregroundLayers = makeSpriteStack(FOREGROUND_LAYER_CONFIG);
-
 let sceneTime = 0;
-
-function layoutSpriteStack(stack, w, h) {
-  for (const pl of stack) {
-    layoutBottomWidth(pl.sprite, w, h, 0, 0);
-  }
-}
 
 function updateWaterLayout(screenWidth, screenHeight) {
   const cx = screenWidth / 2;
@@ -553,7 +513,6 @@ function updateWaterLayout(screenWidth, screenHeight) {
 function updateLayout() {
   const { width: w, height: h } = app.screen;
   updateWaterLayout(w, h);
-  layoutSpriteStack(foregroundLayers, w, h);
 }
 
 updateLayout();
@@ -572,8 +531,10 @@ app.ticker.add(() => {
   threeCamera.position.x += (threeMouseX - threeCamera.position.x) * 0.05;
   threeCamera.position.y += (-threeMouseY - threeCamera.position.y) * 0.05;
 
-  if (threeSphere) {
-    threeSphere.rotation.y += deltaSeconds * 0.4;
+  updateThreeGroundLayout();
+
+  if (threeFlower) {
+    threeFlower.rotation.y += deltaSeconds * 0.35;
   }
 
   tickThreeParticles(deltaSeconds, sceneTime);
@@ -582,10 +543,6 @@ app.ticker.add(() => {
     threeComposer.render(deltaSeconds);
   } else {
     threeRenderer.render(threeScene, threeCamera);
-  }
-
-  for (const pl of foregroundLayers) {
-    pl.sprite.rotation = Math.sin(sceneTime) * 0.02;
   }
 
   for (const layer of waterLayers) {
