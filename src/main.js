@@ -107,8 +107,6 @@ document.body.appendChild(threeRenderer.domElement);
 const threeScene = new THREE.Scene();
 /** Fills transparent texels in layered PNGs (WebGL clear is black by default). */
 threeScene.background = new THREE.Color(0x1a0d28);
-/** Depth haze (bright red for visibility — tune color/density for production). */
-threeScene.fog = new THREE.FogExp2(0xff3030, 0.045);
 
 const threeCamera = new THREE.PerspectiveCamera(
   60,
@@ -125,8 +123,6 @@ const flowerPointerNdc = new THREE.Vector2();
 
 const THREE_BG_PATHS = {
   far: "./assets/images/main-bg.png",
-  mid: "./assets/images/mid-bg.png",
-  near: "./assets/images/close-bg.png",
 };
 
 /** @type {{ mesh: THREE.Mesh; texAspect: number }[]} */
@@ -173,18 +169,16 @@ const FLOWER_BREATH = {
 };
 
 /**
- * Light scale on top of contain — a bit of texture may clip at the edges
- * when the camera parallax moves; keep modest so 2000×1000 (2:1) art stays
- * mostly fully visible on 16:9.
+ * Extra scale so camera parallax does not show empty frustum at plane edges.
  */
 const THREE_BG_OVERSCAN_X = 1.12;
 const THREE_BG_OVERSCAN_Y = 1.08;
 
 /**
- * Fit the full texture inside the frustum at `distance` (CSS object-fit:
- * contain). Empty bands show `threeScene.background`.
+ * Fill the view at `distance` (CSS object-fit: cover) — fullscreen background
+ * for 16:9 art; may crop top/bottom or sides.
  */
-function planeSizeContain(camera, distance, texAspect) {
+function planeSizeCover(camera, distance, texAspect) {
   const vFov = (camera.fov * Math.PI) / 180;
   const viewH = 2 * Math.tan(vFov / 2) * distance;
   const viewW = viewH * camera.aspect;
@@ -192,11 +186,11 @@ function planeSizeContain(camera, distance, texAspect) {
   let planeW;
   let planeH;
   if (texAspect > viewAspect) {
-    planeW = viewW;
-    planeH = planeW / texAspect;
-  } else {
     planeH = viewH;
     planeW = planeH * texAspect;
+  } else {
+    planeW = viewW;
+    planeH = planeW / texAspect;
   }
   planeW *= THREE_BG_OVERSCAN_X;
   planeH *= THREE_BG_OVERSCAN_Y;
@@ -260,7 +254,7 @@ function updateThreeBgPlaneSizes() {
   for (const layer of threeBgLayers) {
     const z = layer.mesh.position.z;
     const distance = Math.abs(threeCamera.position.z - z);
-    const { planeW, planeH } = planeSizeContain(
+    const { planeW, planeH } = planeSizeCover(
       threeCamera,
       distance,
       layer.texAspect,
@@ -290,24 +284,18 @@ function updateThreeGroundLayout() {
 }
 
 async function loadThreeBackgroundLayers() {
-  const [texFar, texMid, texNear] = await Promise.all([
-    textureLoader.loadAsync(THREE_BG_PATHS.far),
-    textureLoader.loadAsync(THREE_BG_PATHS.mid),
-    textureLoader.loadAsync(THREE_BG_PATHS.near),
-  ]);
-  for (const map of [texFar, texMid, texNear]) {
-    map.colorSpace = THREE.SRGBColorSpace;
-    map.wrapS = THREE.ClampToEdgeWrapping;
-    map.wrapT = THREE.ClampToEdgeWrapping;
-  }
+  const texFar = await textureLoader.loadAsync(THREE_BG_PATHS.far);
+  texFar.colorSpace = THREE.SRGBColorSpace;
+  texFar.wrapS = THREE.ClampToEdgeWrapping;
+  texFar.wrapT = THREE.ClampToEdgeWrapping;
 
   function makeLayerMaterial(map) {
-    return new THREE.MeshLambertMaterial({
+    return new THREE.MeshBasicMaterial({
       map,
-      flatShading: true,
       transparent: true,
       depthWrite: false,
       side: THREE.DoubleSide,
+      toneMapped: false,
     });
   }
 
@@ -316,23 +304,10 @@ async function loadThreeBackgroundLayers() {
   far.position.z = -5;
   far.renderOrder = 0;
 
-  const mid = new THREE.Mesh(geo.clone(), makeLayerMaterial(texMid));
-  mid.position.z = -3;
-  mid.renderOrder = 1;
-
-  const near = new THREE.Mesh(geo.clone(), makeLayerMaterial(texNear));
-  near.position.z = -1;
-  near.renderOrder = 2;
-
-  threeScene.add(far, mid, near);
+  threeScene.add(far);
 
   threeParticles = createUpperSkyParticles();
   threeScene.add(threeParticles);
-
-  threeScene.add(new THREE.AmbientLight(0xffffff, 0.6));
-  const mainDirLight = new THREE.DirectionalLight(0xffffff, 0.4);
-  mainDirLight.position.set(2, 2, 2);
-  threeScene.add(mainDirLight);
 
   const flowerGltf = await new GLTFLoader().loadAsync("./assets/models/flower.glb");
   const flowerRoot = flowerGltf.scene;
@@ -341,12 +316,12 @@ async function loadThreeBackgroundLayers() {
       o.renderOrder = 10;
       const mats = Array.isArray(o.material) ? o.material : [o.material];
       const next = mats.map((mat) => {
-        return new THREE.MeshLambertMaterial({
+        return new THREE.MeshBasicMaterial({
           map: mat.map ?? null,
-          flatShading: true,
           color: mat.color ? mat.color.clone() : new THREE.Color(0xffffff),
           transparent: mat.transparent === true,
           opacity: mat.opacity ?? 1,
+          toneMapped: false,
         });
       });
       o.material = next.length === 1 ? next[0] : next;
@@ -440,12 +415,12 @@ async function loadThreeBackgroundLayers() {
   const groundGeo = new THREE.PlaneGeometry(1, 1);
   threeGroundMesh = new THREE.Mesh(
     groundGeo,
-    new THREE.MeshLambertMaterial({
+    new THREE.MeshBasicMaterial({
       map: texGround,
-      flatShading: true,
       transparent: true,
       depthWrite: false,
       side: THREE.DoubleSide,
+      toneMapped: false,
     }),
   );
   threeGroundMesh.rotation.x = -Math.PI / 2;
@@ -456,11 +431,10 @@ async function loadThreeBackgroundLayers() {
 
   updateThreeGroundLayout();
 
-  threeBgLayers.push(
-    { mesh: far, texAspect: texFar.image.width / texFar.image.height },
-    { mesh: mid, texAspect: texMid.image.width / texMid.image.height },
-    { mesh: near, texAspect: texNear.image.width / texNear.image.height },
-  );
+  threeBgLayers.push({
+    mesh: far,
+    texAspect: texFar.image.width / texFar.image.height,
+  });
   updateThreeBgPlaneSizes();
 }
 
