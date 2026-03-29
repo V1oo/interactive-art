@@ -121,9 +121,14 @@ const textureLoader = new THREE.TextureLoader();
 const flowerRaycaster = new THREE.Raycaster();
 const flowerPointerNdc = new THREE.Vector2();
 
-const THREE_BG_PATHS = {
-  far: "./assets/images/main-bg.png",
-};
+/** Back → front (still behind particles / flower / Pixi). Deeper Z = farther from camera. */
+const THREE_PARALLAX_LAYERS = [
+  { texturePath: "./assets/images/main-bg.png", z: -20, renderOrder: 0 },
+  { texturePath: "./assets/images/bg-1.png", z: -19, renderOrder: 1 },
+  { texturePath: "./assets/images/tree-lvl-1.png", z: -18, renderOrder: 2 },
+  { texturePath: "./assets/images/tree-lvl-2.png", z: -17, renderOrder: 3 },
+  { texturePath: "./assets/images/rock-lvl-1.png", z: -16, renderOrder: 4 },
+];
 
 /** @type {{ mesh: THREE.Mesh; texAspect: number }[]} */
 const threeBgLayers = [];
@@ -134,15 +139,10 @@ let threeParticles = null;
 /** GLB flower pivot; `userData.breathTarget` = upper pivot for breathing. */
 let threeFlower = null;
 
-/** Ground plane texture (Three.js). */
-let threeGroundMesh = null;
-
 /** Postprocessing (bloom). */
 let threeComposer = null;
 
 const THREE_SKY_PARTICLE_COUNT = 220;
-
-const THREE_GROUND_Z = 0.62;
 
 /** Y-spin when toggled by click (rad/s). */
 const FLOWER_SPIN_SPEED = 0.35;
@@ -263,31 +263,17 @@ function updateThreeBgPlaneSizes() {
   }
 }
 
-function updateThreeGroundLayout() {
-  if (!threeGroundMesh) return;
-
-  const vFov = (threeCamera.fov * Math.PI) / 180;
-  const cx = threeCamera.position.x;
-  const cy = threeCamera.position.y;
-  const cz = threeCamera.position.z;
-
-  const gZ = THREE_GROUND_Z;
-  const gDist = Math.max(cz - gZ, 0.05);
-  const gViewH = 2 * Math.tan(vFov / 2) * gDist;
-  const gViewW = gViewH * threeCamera.aspect;
-  const bottomY = cy - gViewH / 2;
-  const gAspect = threeGroundMesh.userData.texAspect;
-  const groundW = gViewW * 1.22;
-  const groundD = groundW / gAspect;
-  threeGroundMesh.scale.set(groundW, groundD, 1);
-  threeGroundMesh.position.set(cx, bottomY - 0.04, gZ);
-}
-
 async function loadThreeBackgroundLayers() {
-  const texFar = await textureLoader.loadAsync(THREE_BG_PATHS.far);
-  texFar.colorSpace = THREE.SRGBColorSpace;
-  texFar.wrapS = THREE.ClampToEdgeWrapping;
-  texFar.wrapT = THREE.ClampToEdgeWrapping;
+  const textures = await Promise.all(
+    THREE_PARALLAX_LAYERS.map((cfg) =>
+      textureLoader.loadAsync(cfg.texturePath),
+    ),
+  );
+  for (const tex of textures) {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+  }
 
   function makeLayerMaterial(map) {
     return new THREE.MeshBasicMaterial({
@@ -300,11 +286,18 @@ async function loadThreeBackgroundLayers() {
   }
 
   const geo = new THREE.PlaneGeometry(1, 1);
-  const far = new THREE.Mesh(geo, makeLayerMaterial(texFar));
-  far.position.z = -5;
-  far.renderOrder = 0;
-
-  threeScene.add(far);
+  for (let i = 0; i < THREE_PARALLAX_LAYERS.length; i++) {
+    const cfg = THREE_PARALLAX_LAYERS[i];
+    const map = textures[i];
+    const mesh = new THREE.Mesh(geo, makeLayerMaterial(map));
+    mesh.position.z = cfg.z;
+    mesh.renderOrder = cfg.renderOrder;
+    threeScene.add(mesh);
+    threeBgLayers.push({
+      mesh,
+      texAspect: map.image.width / map.image.height,
+    });
+  }
 
   threeParticles = createUpperSkyParticles();
   threeScene.add(threeParticles);
@@ -407,34 +400,6 @@ async function loadThreeBackgroundLayers() {
   hitMesh.renderOrder = 11;
   flowerPivot.add(hitMesh);
 
-  const texGround = await textureLoader.loadAsync("./assets/images/plane.png");
-  texGround.colorSpace = THREE.SRGBColorSpace;
-  texGround.wrapS = THREE.ClampToEdgeWrapping;
-  texGround.wrapT = THREE.ClampToEdgeWrapping;
-
-  const groundGeo = new THREE.PlaneGeometry(1, 1);
-  threeGroundMesh = new THREE.Mesh(
-    groundGeo,
-    new THREE.MeshBasicMaterial({
-      map: texGround,
-      transparent: true,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      toneMapped: false,
-    }),
-  );
-  threeGroundMesh.rotation.x = -Math.PI / 2;
-  threeGroundMesh.renderOrder = 3;
-  threeGroundMesh.userData.texAspect =
-    texGround.image.width / texGround.image.height;
-  threeScene.add(threeGroundMesh);
-
-  updateThreeGroundLayout();
-
-  threeBgLayers.push({
-    mesh: far,
-    texAspect: texFar.image.width / texFar.image.height,
-  });
   updateThreeBgPlaneSizes();
 }
 
@@ -469,7 +434,6 @@ function resizeThree() {
   threeCamera.aspect = w / h;
   threeCamera.updateProjectionMatrix();
   updateThreeBgPlaneSizes();
-  updateThreeGroundLayout();
   if (threeComposer) {
     threeComposer.setSize(w, h);
     threeComposer.setPixelRatio(threeRenderer.getPixelRatio());
@@ -614,8 +578,6 @@ app.ticker.add(() => {
 
   threeCamera.position.x += (threeMouseX - threeCamera.position.x) * 0.05;
   threeCamera.position.y += (-threeMouseY - threeCamera.position.y) * 0.05;
-
-  updateThreeGroundLayout();
 
   if (threeFlower) {
     if (flowerSpinEnabled) {
