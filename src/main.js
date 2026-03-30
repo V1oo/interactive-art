@@ -139,6 +139,9 @@ let threeParticles = null;
 /** GLB flower pivot; `userData.breathTarget` = upper pivot for breathing. */
 let threeFlower = null;
 
+/** GLB prop to the right, in front of parallax trees (see `GUBE_*`). */
+let threeGube = null;
+
 /** Postprocessing (bloom). */
 let threeComposer = null;
 
@@ -149,6 +152,20 @@ const FLOWER_SPIN_SPEED = 0.35;
 
 /** World Y offset of the flower (lower = further down on screen). */
 const FLOWER_PIVOT_Y = -1.35;
+
+/** `gube.glb` — прижат к правому краю кадра (см. `updateGubeToViewportRightEdge`). */
+const GUBE_MODEL_PATH = "./assets/models/gube.glb";
+/** Мировая Z плоскости, где стоит куб (как у фона со скалами). */
+const GUBE_PLANE_Z = -9.35;
+/**
+ * Точка на экране для пересечения луча: почти правый край (-1…1), чуть ниже центра.
+ * x ближе к 1 — ближе к самому краю кадра.
+ */
+const GUBE_NDC = { x: 0.998, y: -0.82 };
+/** Доп. поворот пивота (радианы); y = π — ещё 180° вокруг вертикали. */
+const GUBE_ROTATION = { x: 0, y: Math.PI, z: 0 };
+/** Целевая высота в мире после нормализации по bounding box. */
+const GUBE_TARGET_HEIGHT = 1.15;
 
 /** Invisible hit sphere radius multiplier vs bounding sphere of the flower. */
 const FLOWER_HIT_RADIUS_MULT = 1.75;
@@ -261,6 +278,24 @@ function updateThreeBgPlaneSizes() {
     );
     layer.mesh.scale.set(planeW, planeH, 1);
   }
+}
+
+const _gubeUnprojectVec = new THREE.Vector3();
+
+/** Ставит пивот куба на пересечении луча (правый край экрана) с плоскостью z = GUBE_PLANE_Z. */
+function updateGubeToViewportRightEdge() {
+  if (!threeGube) return;
+  const planeZ = GUBE_PLANE_Z;
+  _gubeUnprojectVec.set(GUBE_NDC.x, GUBE_NDC.y, 0.5);
+  _gubeUnprojectVec.unproject(threeCamera);
+  const o = threeCamera.position;
+  const dx = _gubeUnprojectVec.x - o.x;
+  const dy = _gubeUnprojectVec.y - o.y;
+  const dz = _gubeUnprojectVec.z - o.z;
+  if (Math.abs(dz) < 1e-6) return;
+  const t = (planeZ - o.z) / dz;
+  if (t <= 0) return;
+  threeGube.position.set(o.x + dx * t, o.y + dy * t, planeZ);
 }
 
 async function loadThreeBackgroundLayers() {
@@ -400,6 +435,51 @@ async function loadThreeBackgroundLayers() {
   hitMesh.renderOrder = 11;
   flowerPivot.add(hitMesh);
 
+  try {
+    const gubeGltf = await new GLTFLoader().loadAsync(GUBE_MODEL_PATH);
+    const gubeRoot = gubeGltf.scene;
+    gubeRoot.traverse((o) => {
+      if (o.isMesh) {
+        o.renderOrder = 8;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        const next = mats.map((mat) => {
+          return new THREE.MeshBasicMaterial({
+            map: mat.map ?? null,
+            color: mat.color ? mat.color.clone() : new THREE.Color(0xffffff),
+            transparent: mat.transparent === true,
+            opacity: mat.opacity ?? 1,
+            toneMapped: false,
+          });
+        });
+        o.material = next.length === 1 ? next[0] : next;
+      }
+    });
+
+    let gubeBox = new THREE.Box3().setFromObject(gubeRoot);
+    const gubeCenter = new THREE.Vector3();
+    gubeBox.getCenter(gubeCenter);
+    gubeRoot.position.sub(gubeCenter);
+    gubeBox.setFromObject(gubeRoot);
+    gubeRoot.position.y -= gubeBox.min.y;
+    gubeBox.setFromObject(gubeRoot);
+    const gubeH = gubeBox.max.y - gubeBox.min.y;
+    gubeRoot.scale.setScalar(
+      GUBE_TARGET_HEIGHT / Math.max(gubeH, 1e-6),
+    );
+    gubeBox.setFromObject(gubeRoot);
+    gubeRoot.position.y -= gubeBox.min.y;
+
+    const gubePivot = new THREE.Group();
+    gubePivot.add(gubeRoot);
+    gubePivot.rotation.set(GUBE_ROTATION.x, GUBE_ROTATION.y, GUBE_ROTATION.z);
+    gubePivot.renderOrder = 8;
+    threeScene.add(gubePivot);
+    threeGube = gubePivot;
+    updateGubeToViewportRightEdge();
+  } catch (err) {
+    console.warn("Gube model not loaded:", GUBE_MODEL_PATH, err);
+  }
+
   updateThreeBgPlaneSizes();
 }
 
@@ -434,6 +514,7 @@ function resizeThree() {
   threeCamera.aspect = w / h;
   threeCamera.updateProjectionMatrix();
   updateThreeBgPlaneSizes();
+  updateGubeToViewportRightEdge();
   if (threeComposer) {
     threeComposer.setSize(w, h);
     threeComposer.setPixelRatio(threeRenderer.getPixelRatio());
@@ -578,6 +659,8 @@ app.ticker.add(() => {
 
   threeCamera.position.x += (threeMouseX - threeCamera.position.x) * 0.05;
   threeCamera.position.y += (-threeMouseY - threeCamera.position.y) * 0.05;
+
+  updateGubeToViewportRightEdge();
 
   if (threeFlower) {
     if (flowerSpinEnabled) {
