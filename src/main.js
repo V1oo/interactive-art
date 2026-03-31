@@ -109,16 +109,21 @@ const threeScene = new THREE.Scene();
 const THREE_SCENE_BG = 0x1a0d28;
 threeScene.background = new THREE.Color(THREE_SCENE_BG);
 /** Экспоненциальный туман: «съедает» даль пола и стыкует с фоном. */
-const THREE_SCENE_FOG_DENSITY = 0.021;
+const THREE_SCENE_FOG_DENSITY = 0.034;
 threeScene.fog = new THREE.FogExp2(THREE_SCENE_BG, THREE_SCENE_FOG_DENSITY);
 
 const threeCamera = new THREE.PerspectiveCamera(
-  52,
+  50,
   window.innerWidth / Math.max(window.innerHeight, 1),
   0.1,
   500,
 );
-threeCamera.position.set(0, -0.58, 0);
+/** Выше сцены + взгляд вниз; чуть ниже/ровнее — чуть больше пола в кадре (YXZ). */
+const THREE_CAMERA_Y = 0.78;
+const THREE_CAMERA_PITCH_X = 0.17;
+threeCamera.position.set(0, THREE_CAMERA_Y, 0);
+threeCamera.rotation.order = "YXZ";
+threeCamera.rotation.x = THREE_CAMERA_PITCH_X;
 
 const textureLoader = new THREE.TextureLoader();
 
@@ -171,11 +176,11 @@ const FLOWER_WORLD_MAX_EXTENT = 7;
 /** Мировая высота невидимого пола (совпадает с «землёй» у цветка). */
 const THREE_FLOOR_Y = FLOWER_PIVOT_Y;
 /** Размер плоскости пола по ширине (локальная X). */
-const THREE_FLOOR_SIZE = 260;
-/** Глубина пола (локальная Y → вглубь после наклона); короткий клин под туман. */
-const THREE_FLOOR_SIZE_Z = THREE_FLOOR_SIZE * 0.11;
-/** Наклон пола вокруг мировой оси X (°); круче — меньше пола в кадре. */
-const THREE_FLOOR_ROT_X_DEG = -83;
+const THREE_FLOOR_SIZE = 220;
+/** Глубина пола (локальная Y → вглубь после наклона). */
+const THREE_FLOOR_SIZE_Z = THREE_FLOOR_SIZE * 0.09;
+/** Наклон пола вокруг мировой оси X (°); круче — меньше полосы пола на экране. */
+const THREE_FLOOR_ROT_X_DEG = -84.5;
 /** Временная видимость пола; поставьте 0 — снова невидимый. */
 const THREE_FLOOR_DEBUG_OPACITY = 0.28;
 const THREE_FLOOR_DEBUG_COLOR = 0x4a7c59;
@@ -184,10 +189,10 @@ const THREE_FLOOR_DEBUG_COLOR = 0x4a7c59;
  * z ближе к 0 — ближе к камере; z отрицательный — дальше.
  */
 const FLOOR_GUIDE_Z_NEAR = -3;
-const FLOOR_GUIDE_Z_FAR = -13;
-const FLOOR_GUIDE_X_STEP = 8;
-const FLOOR_GUIDE_X_HALF = 72;
-const FLOOR_GUIDE_Z_CROSS_STEP = 3;
+const FLOOR_GUIDE_Z_FAR = -8;
+const FLOOR_GUIDE_X_STEP = 7;
+const FLOOR_GUIDE_X_HALF = 58;
+const FLOOR_GUIDE_Z_CROSS_STEP = 2;
 const FLOOR_GUIDE_COLOR = 0xc8e8d4;
 const FLOOR_GUIDE_OPACITY = 0.55;
 
