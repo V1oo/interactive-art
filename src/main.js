@@ -105,32 +105,40 @@ Object.assign(threeRenderer.domElement.style, {
 document.body.appendChild(threeRenderer.domElement);
 
 const threeScene = new THREE.Scene();
-/** Fills transparent texels in layered PNGs (WebGL clear is black by default). */
-threeScene.background = new THREE.Color(0x1a0d28);
+/** Совпадает с туманом — мягкий горизонт как на референсе. */
+const THREE_SCENE_BG = 0x1a0d28;
+threeScene.background = new THREE.Color(THREE_SCENE_BG);
+/** Экспоненциальный туман: «съедает» даль пола и стыкует с фоном. */
+const THREE_SCENE_FOG_DENSITY = 0.021;
+threeScene.fog = new THREE.FogExp2(THREE_SCENE_BG, THREE_SCENE_FOG_DENSITY);
 
 const threeCamera = new THREE.PerspectiveCamera(
-  60,
+  52,
   window.innerWidth / Math.max(window.innerHeight, 1),
   0.1,
-  100,
+  500,
 );
-threeCamera.position.z = 5;
+threeCamera.position.set(0, -0.58, 0);
 
 const textureLoader = new THREE.TextureLoader();
 
 const flowerRaycaster = new THREE.Raycaster();
 const flowerPointerNdc = new THREE.Vector2();
 
-/** Back → front (still behind particles / flower / Pixi). Deeper Z = farther from camera. */
+/**
+ * Back → front. Camera z = 0, −Z into scene; smaller z = farther.
+ * scale — uniform world scale of the 1×1 plane.
+ */
+/** Порядок: дальше → ближе (z и renderOrder согласованы). */
 const THREE_PARALLAX_LAYERS = [
-  { texturePath: "./assets/images/main-bg.png", z: -20, renderOrder: 0 },
-  { texturePath: "./assets/images/bg-1.png", z: -19, renderOrder: 1 },
-  { texturePath: "./assets/images/tree-lvl-1.png", z: -18, renderOrder: 2 },
-  { texturePath: "./assets/images/tree-lvl-2.png", z: -17, renderOrder: 3 },
-  { texturePath: "./assets/images/rock-lvl-1.png", z: -16, renderOrder: 4 },
+  { texturePath: "./assets/images/main-bg.png", z: -34, scale: 200, renderOrder: 0 },
+  { texturePath: "./assets/images/tree-lvl-2.png", z: -31, scale: 60, renderOrder: 1 },
+  { texturePath: "./assets/images/tree-lvl-1.png", z: -28, scale: 40, renderOrder: 2 },
+  { texturePath: "./assets/images/bg-1.png", z: -23, scale: 120, renderOrder: 3 },
+  { texturePath: "./assets/images/rock-lvl-1.png", z: -12, scale: 25, renderOrder: 4 },
 ];
 
-/** @type {{ mesh: THREE.Mesh; texAspect: number }[]} */
+/** @type {{ mesh: THREE.Mesh; worldScale: number }[]} */
 const threeBgLayers = [];
 
 /** Soft particles in the upper sky (Three.js). */
@@ -142,6 +150,9 @@ let threeFlower = null;
 /** GLB prop to the right, in front of parallax trees (see `GUBE_*`). */
 let threeGube = null;
 
+/** Невидимый пол (XZ); `Raycaster.intersectObject(threeFloor)` — точка посадки. */
+let threeFloor = null;
+
 /** Postprocessing (bloom). */
 let threeComposer = null;
 
@@ -152,20 +163,49 @@ const FLOWER_SPIN_SPEED = 0.35;
 
 /** World Y offset of the flower (lower = further down on screen). */
 const FLOWER_PIVOT_Y = -1.35;
+/** Flower + gube row depth. */
+const THREE_FOREGROUND_Z = -10;
+/** Target max model extent in world units (~5–10). */
+const FLOWER_WORLD_MAX_EXTENT = 7;
 
-/** `gube.glb` — прижат к правому краю кадра (см. `updateGubeToViewportRightEdge`). */
-const GUBE_MODEL_PATH = "./assets/models/gube.glb";
-/** Мировая Z плоскости, где стоит куб (как у фона со скалами). */
-const GUBE_PLANE_Z = -9.35;
+/** Мировая высота невидимого пола (совпадает с «землёй» у цветка). */
+const THREE_FLOOR_Y = FLOWER_PIVOT_Y;
+/** Размер плоскости пола по ширине (локальная X). */
+const THREE_FLOOR_SIZE = 260;
+/** Глубина пола (локальная Y → вглубь после наклона); короткий клин под туман. */
+const THREE_FLOOR_SIZE_Z = THREE_FLOOR_SIZE * 0.11;
+/** Наклон пола вокруг мировой оси X (°); круче — меньше пола в кадре. */
+const THREE_FLOOR_ROT_X_DEG = -83;
+/** Временная видимость пола; поставьте 0 — снова невидимый. */
+const THREE_FLOOR_DEBUG_OPACITY = 0.28;
+const THREE_FLOOR_DEBUG_COLOR = 0x4a7c59;
 /**
- * Точка на экране для пересечения луча: почти правый край (-1…1), чуть ниже центра.
- * x ближе к 1 — ближе к самому краю кадра.
+ * Сетка на полу: линии вдоль −Z (от камеры вглубь) и поперечные по Z.
+ * z ближе к 0 — ближе к камере; z отрицательный — дальше.
  */
-const GUBE_NDC = { x: 0.998, y: -0.82 };
+const FLOOR_GUIDE_Z_NEAR = -3;
+const FLOOR_GUIDE_Z_FAR = -13;
+const FLOOR_GUIDE_X_STEP = 8;
+const FLOOR_GUIDE_X_HALF = 72;
+const FLOOR_GUIDE_Z_CROSS_STEP = 3;
+const FLOOR_GUIDE_COLOR = 0xc8e8d4;
+const FLOOR_GUIDE_OPACITY = 0.55;
+
+/** Куб на полу (рядом с цветком). */
+const FLOOR_CUBE_MODEL_PATH = "./assets/models/cube.glb";
+const FLOOR_CUBE_TARGET_HEIGHT = 2.2;
+const FLOOR_CUBE_X = -7;
+const FLOOR_BRANCH_X = 4;
+
+/** `gube.glb` — фиксированно справа, на полу (−Z глубже цветка = дальше от камеры). */
+const GUBE_MODEL_PATH = "./assets/models/gube.glb";
+/** Мировая позиция пивота (после посадки низ модели на THREE_FLOOR_Y). */
+const GUBE_X = 22;
+const GUBE_Z = -17;
 /** Доп. поворот пивота (радианы); y = π — ещё 180° вокруг вертикали. */
 const GUBE_ROTATION = { x: 0, y: Math.PI, z: 0 };
 /** Целевая высота в мире после нормализации по bounding box. */
-const GUBE_TARGET_HEIGHT = 1.15;
+const GUBE_TARGET_HEIGHT = 6;
 
 /** Invisible hit sphere radius multiplier vs bounding sphere of the flower. */
 const FLOWER_HIT_RADIUS_MULT = 1.75;
@@ -185,43 +225,14 @@ const FLOWER_BREATH = {
   freqSway: 1.05,
 };
 
-/**
- * Extra scale so camera parallax does not show empty frustum at plane edges.
- */
-const THREE_BG_OVERSCAN_X = 1.12;
-const THREE_BG_OVERSCAN_Y = 1.08;
-
-/**
- * Fill the view at `distance` (CSS object-fit: cover) — fullscreen background
- * for 16:9 art; may crop top/bottom or sides.
- */
-function planeSizeCover(camera, distance, texAspect) {
-  const vFov = (camera.fov * Math.PI) / 180;
-  const viewH = 2 * Math.tan(vFov / 2) * distance;
-  const viewW = viewH * camera.aspect;
-  const viewAspect = viewW / viewH;
-  let planeW;
-  let planeH;
-  if (texAspect > viewAspect) {
-    planeH = viewH;
-    planeW = planeH * texAspect;
-  } else {
-    planeW = viewW;
-    planeH = planeW / texAspect;
-  }
-  planeW *= THREE_BG_OVERSCAN_X;
-  planeH *= THREE_BG_OVERSCAN_Y;
-  return { planeW, planeH };
-}
-
 function createUpperSkyParticles() {
   const positions = new Float32Array(THREE_SKY_PARTICLE_COUNT * 3);
   const verticalSpeed = new Float32Array(THREE_SKY_PARTICLE_COUNT);
   for (let i = 0; i < THREE_SKY_PARTICLE_COUNT; i++) {
     const ix = i * 3;
-    positions[ix] = (Math.random() - 0.5) * 10;
-    positions[ix + 1] = 0.2 + Math.random() * 2.35;
-    positions[ix + 2] = -1.15 + Math.random() * 1.75;
+    positions[ix] = (Math.random() - 0.5) * 80;
+    positions[ix + 1] = 8 + Math.random() * 35;
+    positions[ix + 2] = -18 + Math.random() * 14;
     verticalSpeed[i] = 0.1 + Math.random() * 0.16;
   }
   const geometry = new THREE.BufferGeometry();
@@ -231,19 +242,20 @@ function createUpperSkyParticles() {
   );
   const material = new THREE.PointsMaterial({
     color: 0xd4f2ff,
-    size: 0.036,
+    size: 0.55,
     transparent: true,
     opacity: 0.48,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
     sizeAttenuation: true,
+    fog: true,
   });
   const points = new THREE.Points(geometry, material);
   points.renderOrder = 6;
   points.frustumCulled = false;
   points.userData.verticalSpeed = verticalSpeed;
-  points.userData.yLo = 0.12;
-  points.userData.yHi = 2.95;
+  points.userData.yLo = 6;
+  points.userData.yHi = 48;
   return points;
 }
 
@@ -261,7 +273,7 @@ function tickThreeParticles(deltaSeconds, time) {
     if (arr[ix + 1] > yHi) {
       arr[ix + 1] = yLo + Math.random() * 0.4;
       arr[ix] = (Math.random() - 0.5) * 10;
-      arr[ix + 2] = -1.1 + Math.random() * 1.7;
+      arr[ix + 2] = -20 + Math.random() * 16;
     }
   }
   posAttr.needsUpdate = true;
@@ -269,33 +281,76 @@ function tickThreeParticles(deltaSeconds, time) {
 
 function updateThreeBgPlaneSizes() {
   for (const layer of threeBgLayers) {
-    const z = layer.mesh.position.z;
-    const distance = Math.abs(threeCamera.position.z - z);
-    const { planeW, planeH } = planeSizeCover(
-      threeCamera,
-      distance,
-      layer.texAspect,
-    );
-    layer.mesh.scale.set(planeW, planeH, 1);
+    const s = layer.worldScale;
+    layer.mesh.scale.set(s, s, 1);
   }
 }
 
-const _gubeUnprojectVec = new THREE.Vector3();
+/** Нижняя грань иерархии `pivot` касается плоскости y = floorY в точке (worldX, worldZ). */
+function placePivotBottomOnFloorAt(pivot, worldX, worldZ, floorY) {
+  pivot.position.set(worldX, 0, worldZ);
+  pivot.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(pivot);
+  pivot.position.y = floorY - box.min.y;
+}
 
-/** Ставит пивот куба на пересечении луча (правый край экрана) с плоскостью z = GUBE_PLANE_Z. */
-function updateGubeToViewportRightEdge() {
-  if (!threeGube) return;
-  const planeZ = GUBE_PLANE_Z;
-  _gubeUnprojectVec.set(GUBE_NDC.x, GUBE_NDC.y, 0.5);
-  _gubeUnprojectVec.unproject(threeCamera);
-  const o = threeCamera.position;
-  const dx = _gubeUnprojectVec.x - o.x;
-  const dy = _gubeUnprojectVec.y - o.y;
-  const dz = _gubeUnprojectVec.z - o.z;
-  if (Math.abs(dz) < 1e-6) return;
-  const t = (planeZ - o.z) / dz;
-  if (t <= 0) return;
-  threeGube.position.set(o.x + dx * t, o.y + dy * t, planeZ);
+/** Простая «ветка» (цилиндры); отдельной модели в репозитории нет. */
+function createFloorBranchGroup() {
+  const brown = new THREE.MeshBasicMaterial({
+    color: 0x5c4033,
+    toneMapped: false,
+    fog: true,
+  });
+  const group = new THREE.Group();
+  const main = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.07, 0.1, 2.4, 8),
+    brown,
+  );
+  main.rotation.z = Math.PI / 2;
+  const twig = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.035, 0.055, 1.0, 6),
+    brown,
+  );
+  twig.rotation.set(0.25, 0.55, Math.PI / 2.15);
+  twig.position.set(0.85, 0.06, 0.12);
+  group.add(main, twig);
+  group.traverse((o) => {
+    if (o.isMesh) o.renderOrder = 9;
+  });
+  return group;
+}
+
+/**
+ * Линии в локальных координатах пола (плоскость XY, z = 0): вдоль «глубины» и поперечники.
+ * После поворота группы совпадают с наклонённым PlaneGeometry.
+ */
+function createFloorPerspectiveGuides() {
+  const positions = [];
+  const ly0 = -FLOOR_GUIDE_Z_NEAR;
+  const ly1 = -FLOOR_GUIDE_Z_FAR;
+  const xH = FLOOR_GUIDE_X_HALF;
+  for (let x = -xH; x <= xH + 1e-6; x += FLOOR_GUIDE_X_STEP) {
+    positions.push(x, ly0, 0, x, ly1, 0);
+  }
+  for (let ly = ly0; ly <= ly1 + 1e-6; ly += FLOOR_GUIDE_Z_CROSS_STEP) {
+    positions.push(-xH, ly, 0, xH, ly, 0);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(positions, 3),
+  );
+  const mat = new THREE.LineBasicMaterial({
+    color: FLOOR_GUIDE_COLOR,
+    transparent: true,
+    opacity: FLOOR_GUIDE_OPACITY,
+    depthWrite: false,
+    toneMapped: false,
+    fog: true,
+  });
+  const lines = new THREE.LineSegments(geo, mat);
+  lines.renderOrder = 0;
+  return lines;
 }
 
 async function loadThreeBackgroundLayers() {
@@ -317,6 +372,7 @@ async function loadThreeBackgroundLayers() {
       depthWrite: false,
       side: THREE.DoubleSide,
       toneMapped: false,
+      fog: true,
     });
   }
 
@@ -330,12 +386,94 @@ async function loadThreeBackgroundLayers() {
     threeScene.add(mesh);
     threeBgLayers.push({
       mesh,
-      texAspect: map.image.width / map.image.height,
+      worldScale: cfg.scale,
     });
   }
 
   threeParticles = createUpperSkyParticles();
   threeScene.add(threeParticles);
+
+  const floorGeo = new THREE.PlaneGeometry(THREE_FLOOR_SIZE, THREE_FLOOR_SIZE_Z);
+  const floorDebugVisible = THREE_FLOOR_DEBUG_OPACITY > 0;
+  const floorMat = new THREE.MeshBasicMaterial({
+    color: THREE_FLOOR_DEBUG_COLOR,
+    transparent: true,
+    opacity: floorDebugVisible ? THREE_FLOOR_DEBUG_OPACITY : 0,
+    depthWrite: floorDebugVisible,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+    fog: true,
+  });
+  const floorMesh = new THREE.Mesh(floorGeo, floorMat);
+  floorMesh.renderOrder = -1;
+
+  const floorRoot = new THREE.Group();
+  floorRoot.position.set(0, THREE_FLOOR_Y, 0);
+  floorRoot.rotation.x = THREE.MathUtils.degToRad(THREE_FLOOR_ROT_X_DEG);
+  floorRoot.add(floorMesh);
+  floorRoot.add(createFloorPerspectiveGuides());
+  threeScene.add(floorRoot);
+
+  threeFloor = floorMesh;
+
+  try {
+    const cubeGltf = await new GLTFLoader().loadAsync(FLOOR_CUBE_MODEL_PATH);
+    const cubeRoot = cubeGltf.scene;
+    cubeRoot.traverse((o) => {
+      if (o.isMesh) {
+        o.renderOrder = 9;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        const next = mats.map((mat) => {
+          return new THREE.MeshBasicMaterial({
+            map: mat.map ?? null,
+            color: mat.color ? mat.color.clone() : new THREE.Color(0xffffff),
+            transparent: mat.transparent === true,
+            opacity: mat.opacity ?? 1,
+            toneMapped: false,
+            fog: true,
+          });
+        });
+        o.material = next.length === 1 ? next[0] : next;
+      }
+    });
+    let cubeBox = new THREE.Box3().setFromObject(cubeRoot);
+    const cubeCenter = new THREE.Vector3();
+    cubeBox.getCenter(cubeCenter);
+    cubeRoot.position.sub(cubeCenter);
+    cubeBox.setFromObject(cubeRoot);
+    cubeRoot.position.y -= cubeBox.min.y;
+    cubeBox.setFromObject(cubeRoot);
+    const cubeH = cubeBox.max.y - cubeBox.min.y;
+    cubeRoot.scale.setScalar(
+      FLOOR_CUBE_TARGET_HEIGHT / Math.max(cubeH, 1e-6),
+    );
+    cubeBox.setFromObject(cubeRoot);
+    cubeRoot.position.y -= cubeBox.min.y;
+
+    const cubePivot = new THREE.Group();
+    cubePivot.add(cubeRoot);
+    cubePivot.renderOrder = 9;
+    threeScene.add(cubePivot);
+    placePivotBottomOnFloorAt(
+      cubePivot,
+      FLOOR_CUBE_X,
+      THREE_FOREGROUND_Z,
+      THREE_FLOOR_Y,
+    );
+  } catch (err) {
+    console.warn("Floor cube not loaded:", FLOOR_CUBE_MODEL_PATH, err);
+  }
+
+  const branchPivot = new THREE.Group();
+  branchPivot.add(createFloorBranchGroup());
+  branchPivot.renderOrder = 9;
+  threeScene.add(branchPivot);
+  placePivotBottomOnFloorAt(
+    branchPivot,
+    FLOOR_BRANCH_X,
+    THREE_FOREGROUND_Z,
+    THREE_FLOOR_Y,
+  );
 
   const flowerGltf = await new GLTFLoader().loadAsync("./assets/models/flower.glb");
   const flowerRoot = flowerGltf.scene;
@@ -350,6 +488,7 @@ async function loadThreeBackgroundLayers() {
           transparent: mat.transparent === true,
           opacity: mat.opacity ?? 1,
           toneMapped: false,
+          fog: true,
         });
       });
       o.material = next.length === 1 ? next[0] : next;
@@ -366,7 +505,7 @@ async function loadThreeBackgroundLayers() {
 
   const flowerMax = Math.max(flowerSize.x, flowerSize.y, flowerSize.z, 1e-6);
   const flowerPivot = new THREE.Group();
-  flowerPivot.scale.setScalar((0.55 * 4) / flowerMax);
+  flowerPivot.scale.setScalar(FLOWER_WORLD_MAX_EXTENT / flowerMax);
 
   const flowerMotion = new THREE.Group();
   flowerBox.setFromObject(flowerRoot);
@@ -403,7 +542,7 @@ async function loadThreeBackgroundLayers() {
 
   flowerMotion.add(stemGroup, topPivot);
   flowerPivot.add(flowerMotion);
-  flowerPivot.position.set(0, FLOWER_PIVOT_Y, 1.05);
+  flowerPivot.position.set(0, FLOWER_PIVOT_Y, THREE_FOREGROUND_Z);
   flowerPivot.renderOrder = 10;
   threeScene.add(flowerPivot);
   threeFlower = flowerPivot;
@@ -449,6 +588,7 @@ async function loadThreeBackgroundLayers() {
             transparent: mat.transparent === true,
             opacity: mat.opacity ?? 1,
             toneMapped: false,
+            fog: true,
           });
         });
         o.material = next.length === 1 ? next[0] : next;
@@ -475,7 +615,7 @@ async function loadThreeBackgroundLayers() {
     gubePivot.renderOrder = 8;
     threeScene.add(gubePivot);
     threeGube = gubePivot;
-    updateGubeToViewportRightEdge();
+    placePivotBottomOnFloorAt(threeGube, GUBE_X, GUBE_Z, THREE_FLOOR_Y);
   } catch (err) {
     console.warn("Gube model not loaded:", GUBE_MODEL_PATH, err);
   }
@@ -497,14 +637,11 @@ threeComposer.addPass(bloomPass);
 threeComposer.addPass(new OutputPass());
 
 let threeMouseX = 0;
-let threeMouseY = 0;
 
 window.addEventListener("pointermove", (e) => {
   const w = window.innerWidth;
-  const h = window.innerHeight;
-  if (w <= 0 || h <= 0) return;
+  if (w <= 0) return;
   threeMouseX = (e.clientX / w) * 2 - 1;
-  threeMouseY = (e.clientY / h) * 2 - 1;
 });
 
 function resizeThree() {
@@ -514,7 +651,6 @@ function resizeThree() {
   threeCamera.aspect = w / h;
   threeCamera.updateProjectionMatrix();
   updateThreeBgPlaneSizes();
-  updateGubeToViewportRightEdge();
   if (threeComposer) {
     threeComposer.setSize(w, h);
     threeComposer.setPixelRatio(threeRenderer.getPixelRatio());
@@ -658,9 +794,6 @@ app.ticker.add(() => {
   const filterT = 1 - Math.exp(-FILTER_SCALE_SMOOTHING_LAMBDA * deltaSeconds);
 
   threeCamera.position.x += (threeMouseX - threeCamera.position.x) * 0.05;
-  threeCamera.position.y += (-threeMouseY - threeCamera.position.y) * 0.05;
-
-  updateGubeToViewportRightEdge();
 
   if (threeFlower) {
     if (flowerSpinEnabled) {
