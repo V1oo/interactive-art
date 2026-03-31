@@ -141,7 +141,7 @@ const THREE_PARALLAX_LAYERS = [
   },
   { texturePath: "./assets/images/tree-lvl-2.png", z: -32, scale: 60, renderOrder: 1 },
   { texturePath: "./assets/images/tree-lvl-1.png", z: -31, scale: 40, renderOrder: 2 },
-  { texturePath: "./assets/images/bg-1.png", z: -33, scale: 120, renderOrder: 3 },
+  { texturePath: "./assets/images/bg-1.png", z: -33, scale: 60, renderOrder: 3 },
   { texturePath: "./assets/images/rock-lvl-1.png", z: -12, scale: 25, renderOrder: 4 },
 ];
 
