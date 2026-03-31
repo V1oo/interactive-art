@@ -105,12 +105,8 @@ Object.assign(threeRenderer.domElement.style, {
 document.body.appendChild(threeRenderer.domElement);
 
 const threeScene = new THREE.Scene();
-/** Совпадает с туманом — мягкий горизонт как на референсе. */
 const THREE_SCENE_BG = 0x1a0d28;
 threeScene.background = new THREE.Color(THREE_SCENE_BG);
-/** Экспоненциальный туман: «съедает» даль пола и стыкует с фоном. */
-const THREE_SCENE_FOG_DENSITY = 0.034;
-threeScene.fog = new THREE.FogExp2(THREE_SCENE_BG, THREE_SCENE_FOG_DENSITY);
 
 const threeCamera = new THREE.PerspectiveCamera(
   50,
@@ -132,18 +128,24 @@ const flowerPointerNdc = new THREE.Vector2();
 
 /**
  * Back → front. Camera z = 0, −Z into scene; smaller z = farther.
- * scale — uniform world scale of the 1×1 plane.
+ * scale — базовый масштаб 1×1 plane по Y; по X умножается на scaleXMult (если задан).
  */
 /** Порядок: дальше → ближе (z и renderOrder согласованы). */
 const THREE_PARALLAX_LAYERS = [
-  { texturePath: "./assets/images/main-bg.png", z: -34, scale: 200, renderOrder: 0 },
-  { texturePath: "./assets/images/tree-lvl-2.png", z: -31, scale: 60, renderOrder: 1 },
-  { texturePath: "./assets/images/tree-lvl-1.png", z: -28, scale: 40, renderOrder: 2 },
-  { texturePath: "./assets/images/bg-1.png", z: -23, scale: 120, renderOrder: 3 },
+  {
+    texturePath: "./assets/images/main-bg.png",
+    z: -34,
+    scale: 48.4,
+    scaleXMult: 1.651,
+    renderOrder: 0,
+  },
+  { texturePath: "./assets/images/tree-lvl-2.png", z: -32, scale: 60, renderOrder: 1 },
+  { texturePath: "./assets/images/tree-lvl-1.png", z: -31, scale: 40, renderOrder: 2 },
+  { texturePath: "./assets/images/bg-1.png", z: -33, scale: 120, renderOrder: 3 },
   { texturePath: "./assets/images/rock-lvl-1.png", z: -12, scale: 25, renderOrder: 4 },
 ];
 
-/** @type {{ mesh: THREE.Mesh; worldScale: number }[]} */
+/** @type {{ mesh: THREE.Mesh; worldScaleX: number; worldScaleY: number }[]} */
 const threeBgLayers = [];
 
 /** Soft particles in the upper sky (Three.js). */
@@ -253,7 +255,6 @@ function createUpperSkyParticles() {
     blending: THREE.AdditiveBlending,
     depthWrite: false,
     sizeAttenuation: true,
-    fog: true,
   });
   const points = new THREE.Points(geometry, material);
   points.renderOrder = 6;
@@ -286,8 +287,7 @@ function tickThreeParticles(deltaSeconds, time) {
 
 function updateThreeBgPlaneSizes() {
   for (const layer of threeBgLayers) {
-    const s = layer.worldScale;
-    layer.mesh.scale.set(s, s, 1);
+    layer.mesh.scale.set(layer.worldScaleX, layer.worldScaleY, 1);
   }
 }
 
@@ -304,7 +304,6 @@ function createFloorBranchGroup() {
   const brown = new THREE.MeshBasicMaterial({
     color: 0x5c4033,
     toneMapped: false,
-    fog: true,
   });
   const group = new THREE.Group();
   const main = new THREE.Mesh(
@@ -351,7 +350,6 @@ function createFloorPerspectiveGuides() {
     opacity: FLOOR_GUIDE_OPACITY,
     depthWrite: false,
     toneMapped: false,
-    fog: true,
   });
   const lines = new THREE.LineSegments(geo, mat);
   lines.renderOrder = 0;
@@ -377,7 +375,6 @@ async function loadThreeBackgroundLayers() {
       depthWrite: false,
       side: THREE.DoubleSide,
       toneMapped: false,
-      fog: true,
     });
   }
 
@@ -389,9 +386,12 @@ async function loadThreeBackgroundLayers() {
     mesh.position.z = cfg.z;
     mesh.renderOrder = cfg.renderOrder;
     threeScene.add(mesh);
+    const sy = cfg.scale;
+    const sx = sy * (cfg.scaleXMult ?? 1);
     threeBgLayers.push({
       mesh,
-      worldScale: cfg.scale,
+      worldScaleX: sx,
+      worldScaleY: sy,
     });
   }
 
@@ -407,7 +407,6 @@ async function loadThreeBackgroundLayers() {
     depthWrite: floorDebugVisible,
     side: THREE.DoubleSide,
     toneMapped: false,
-    fog: true,
   });
   const floorMesh = new THREE.Mesh(floorGeo, floorMat);
   floorMesh.renderOrder = -1;
@@ -435,7 +434,6 @@ async function loadThreeBackgroundLayers() {
             transparent: mat.transparent === true,
             opacity: mat.opacity ?? 1,
             toneMapped: false,
-            fog: true,
           });
         });
         o.material = next.length === 1 ? next[0] : next;
@@ -493,7 +491,6 @@ async function loadThreeBackgroundLayers() {
           transparent: mat.transparent === true,
           opacity: mat.opacity ?? 1,
           toneMapped: false,
-          fog: true,
         });
       });
       o.material = next.length === 1 ? next[0] : next;
@@ -593,7 +590,6 @@ async function loadThreeBackgroundLayers() {
             transparent: mat.transparent === true,
             opacity: mat.opacity ?? 1,
             toneMapped: false,
-            fog: true,
           });
         });
         o.material = next.length === 1 ? next[0] : next;
