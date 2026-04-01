@@ -154,9 +154,6 @@ let threeParticles = null;
 /** GLB flower pivot; `userData.breathTarget` = upper pivot for breathing. */
 let threeFlower = null;
 
-/** GLB prop to the right, in front of parallax trees (see `GUBE_*`). */
-let threeGube = null;
-
 /** Невидимый пол (XZ); `Raycaster.intersectObject(threeFloor)` — точка посадки. */
 let threeFloor = null;
 
@@ -170,7 +167,7 @@ const FLOWER_SPIN_SPEED = 0.35;
 
 /** World Y offset of the flower (lower = further down on screen). */
 const FLOWER_PIVOT_Y = -1.35;
-/** Flower + gube row depth. */
+/** Flower и пропы в одном ряду по Z (куб слева, stebel справа). */
 const THREE_FOREGROUND_Z = -10;
 /** Target max model extent in world units (~5–10). */
 const FLOWER_WORLD_MAX_EXTENT = 7;
@@ -204,15 +201,15 @@ const FLOOR_CUBE_TARGET_HEIGHT = 2.2;
 const FLOOR_CUBE_X = -7;
 const FLOOR_BRANCH_X = 4;
 
-/** `gube.glb` — фиксированно справа, на полу (−Z глубже цветка = дальше от камеры). */
-const GUBE_MODEL_PATH = "./assets/models/gube.glb";
-/** Мировая позиция пивота (после посадки низ модели на THREE_FLOOR_Y). */
-const GUBE_X = 22;
-const GUBE_Z = -17;
-/** Доп. поворот пивота (радианы); y = π — ещё 180° вокруг вертикали. */
-const GUBE_ROTATION = { x: 0, y: Math.PI, z: 0 };
-/** Целевая высота в мире после нормализации по bounding box. */
-const GUBE_TARGET_HEIGHT = 6;
+/** `stebel.glb` справа от цветка; z как у куба — иначе при камере легко вылезти из кадра. */
+const STEBEL_MODEL_PATHS = [
+  "./assets/models/stebel.glb",
+  "./assets/models/Stebel.glb",
+];
+const STEBEL_X = 8.5;
+const STEBEL_Z = THREE_FOREGROUND_Z;
+const STEBEL_ROTATION = { x: 0, y: Math.PI, z: 0 };
+const STEBEL_TARGET_HEIGHT = 6;
 
 /** Invisible hit sphere radius multiplier vs bounding sphere of the flower. */
 const FLOWER_HIT_RADIUS_MULT = 1.75;
@@ -577,16 +574,40 @@ async function loadThreeBackgroundLayers() {
   flowerPivot.add(hitMesh);
 
   try {
-    const gubeGltf = await new GLTFLoader().loadAsync(GUBE_MODEL_PATH);
-    const gubeRoot = gubeGltf.scene;
-    gubeRoot.traverse((o) => {
+    let stebelGltf = null;
+    let stebelLoadedPath = "";
+    for (const path of STEBEL_MODEL_PATHS) {
+      try {
+        stebelGltf = await new GLTFLoader().loadAsync(path);
+        stebelLoadedPath = path;
+        break;
+      } catch {
+        /* try next path */
+      }
+    }
+    if (!stebelGltf) {
+      throw new Error(
+        `none of: ${STEBEL_MODEL_PATHS.join(", ")}`,
+      );
+    }
+    const stebelRoot = stebelGltf.scene;
+    stebelRoot.traverse((o) => {
       if (o.isMesh) {
         o.renderOrder = 8;
+        o.frustumCulled = false;
         const mats = Array.isArray(o.material) ? o.material : [o.material];
         const next = mats.map((mat) => {
+          const hasMap = !!(mat.map ?? null);
+          const baseCol =
+            mat.color && mat.color.getHex
+              ? mat.color.clone()
+              : new THREE.Color(0xffffff);
+          if (!hasMap && baseCol.getHex() < 0x222222) {
+            baseCol.setHex(0xcccccc);
+          }
           return new THREE.MeshBasicMaterial({
             map: mat.map ?? null,
-            color: mat.color ? mat.color.clone() : new THREE.Color(0xffffff),
+            color: baseCol,
             transparent: mat.transparent === true,
             opacity: mat.opacity ?? 1,
             toneMapped: false,
@@ -596,29 +617,38 @@ async function loadThreeBackgroundLayers() {
       }
     });
 
-    let gubeBox = new THREE.Box3().setFromObject(gubeRoot);
-    const gubeCenter = new THREE.Vector3();
-    gubeBox.getCenter(gubeCenter);
-    gubeRoot.position.sub(gubeCenter);
-    gubeBox.setFromObject(gubeRoot);
-    gubeRoot.position.y -= gubeBox.min.y;
-    gubeBox.setFromObject(gubeRoot);
-    const gubeH = gubeBox.max.y - gubeBox.min.y;
-    gubeRoot.scale.setScalar(
-      GUBE_TARGET_HEIGHT / Math.max(gubeH, 1e-6),
+    let sb = new THREE.Box3().setFromObject(stebelRoot);
+    const sbc = new THREE.Vector3();
+    sb.getCenter(sbc);
+    stebelRoot.position.sub(sbc);
+    sb.setFromObject(stebelRoot);
+    stebelRoot.position.y -= sb.min.y;
+    sb.setFromObject(stebelRoot);
+    const sbH = sb.max.y - sb.min.y;
+    stebelRoot.scale.setScalar(
+      STEBEL_TARGET_HEIGHT / Math.max(sbH, 1e-6),
     );
-    gubeBox.setFromObject(gubeRoot);
-    gubeRoot.position.y -= gubeBox.min.y;
+    sb.setFromObject(stebelRoot);
+    stebelRoot.position.y -= sb.min.y;
 
-    const gubePivot = new THREE.Group();
-    gubePivot.add(gubeRoot);
-    gubePivot.rotation.set(GUBE_ROTATION.x, GUBE_ROTATION.y, GUBE_ROTATION.z);
-    gubePivot.renderOrder = 8;
-    threeScene.add(gubePivot);
-    threeGube = gubePivot;
-    placePivotBottomOnFloorAt(threeGube, GUBE_X, GUBE_Z, THREE_FLOOR_Y);
+    const stebelPivot = new THREE.Group();
+    stebelPivot.add(stebelRoot);
+    stebelPivot.rotation.set(
+      STEBEL_ROTATION.x,
+      STEBEL_ROTATION.y,
+      STEBEL_ROTATION.z,
+    );
+    stebelPivot.renderOrder = 8;
+    threeScene.add(stebelPivot);
+    placePivotBottomOnFloorAt(
+      stebelPivot,
+      STEBEL_X,
+      STEBEL_Z,
+      THREE_FLOOR_Y,
+    );
+    console.info("Stebel loaded:", stebelLoadedPath, "at", STEBEL_X, STEBEL_Z);
   } catch (err) {
-    console.warn("Gube model not loaded:", GUBE_MODEL_PATH, err);
+    console.error("Stebel model not loaded:", err);
   }
 
   updateThreeBgPlaneSizes();
