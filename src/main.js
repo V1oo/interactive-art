@@ -915,12 +915,13 @@ app.ticker.add(() => {
   if (palkanewMotionRoot) {
     const time = sceneTime * PALKANEW_SWAY.freq;
     const y = PALKANEW_TARGET_HEIGHT;
+    const delay = y * 0.5;
     const s = PALKANEW_SWAY;
     const bendX =
-      Math.sin(time + y * 2) * s.leanX +
+      Math.sin(time + delay) * s.leanX +
       Math.sin(time * 0.5 + y * 5) * (s.leanX * 0.5);
     const bendZ =
-      Math.sin(time * 0.97 + y * 2.1) * s.leanZ +
+      Math.sin(time * 0.97 + delay) * s.leanZ +
       Math.sin(time * 0.53 + y * 4.9) * (s.leanZ * 0.5);
     palkanewMotionRoot.rotation.x = bendX;
     palkanewMotionRoot.rotation.z = bendZ;
