@@ -156,6 +156,10 @@ let threeFlower = null;
 
 /** Невидимый пол (XZ); `Raycaster.intersectObject(threeFloor)` — точка посадки. */
 let threeFloor = null;
+/** Меш `Sphere` у palkanew — emissive + мигание в ticker. */
+let palkanewSphereMesh = null;
+/** Корень glTF palkanew — лёгкий наклон в ticker (низ у пола, без шейдерного патча). */
+let palkanewMotionRoot = null;
 
 /** Postprocessing (bloom). */
 let threeComposer = null;
@@ -167,7 +171,7 @@ const FLOWER_SPIN_SPEED = 0.35;
 
 /** World Y offset of the flower (lower = further down on screen). */
 const FLOWER_PIVOT_Y = -1.35;
-/** Flower и пропы в одном ряду по Z (куб слева, stebel справа). */
+/** Flower и пропы в одном ряду по Z (palkanew слева, stebel справа). */
 const THREE_FOREGROUND_Z = -10;
 /** Target max model extent in world units (~5–10). */
 const FLOWER_WORLD_MAX_EXTENT = 7;
@@ -195,13 +199,24 @@ const FLOOR_GUIDE_Z_CROSS_STEP = 2;
 const FLOOR_GUIDE_COLOR = 0xc8e8d4;
 const FLOOR_GUIDE_OPACITY = 0.55;
 
-/** Куб на полу (рядом с цветком). */
-const FLOOR_CUBE_MODEL_PATH = "./assets/models/cube.glb";
-const FLOOR_CUBE_TARGET_HEIGHT = 2.2;
-const FLOOR_CUBE_X = -7;
+/** `palkanew.glb` слева на полу (на месте бывшего куба). */
+const PALKANEW_MODEL_PATHS = [
+  "./assets/models/palkanew.glb",
+  "./assets/models/Palkanew.glb",
+];
+const PALKANEW_TARGET_HEIGHT = 2.2;
+const PALKANEW_X = -7;
+const PALKANEW_SPHERE_NAME = "Sphere";
+const PALKANEW_SPHERE_EMISSIVE = 0x66ffff;
+/** Покачивание palkanew (рад); ось у центра подошвы после центрирования bbox. */
+const PALKANEW_SWAY = {
+  leanX: 0.028,
+  leanZ: 0.019,
+  freq: 0.95,
+};
 const FLOOR_BRANCH_X = 4;
 
-/** `stebel.glb` справа от цветка; z как у куба — иначе при камере легко вылезти из кадра. */
+/** `stebel.glb` справа от цветка; z как у левого пропа — иначе при камере легко вылезти из кадра. */
 const STEBEL_MODEL_PATHS = [
   "./assets/models/stebel.glb",
   "./assets/models/Stebel.glb",
@@ -418,11 +433,26 @@ async function loadThreeBackgroundLayers() {
   threeFloor = floorMesh;
 
   try {
-    const cubeGltf = await new GLTFLoader().loadAsync(FLOOR_CUBE_MODEL_PATH);
-    const cubeRoot = cubeGltf.scene;
-    cubeRoot.traverse((o) => {
+    let palkaGltf = null;
+    let palkaLoadedPath = "";
+    for (const path of PALKANEW_MODEL_PATHS) {
+      try {
+        palkaGltf = await new GLTFLoader().loadAsync(path);
+        palkaLoadedPath = path;
+        break;
+      } catch {
+        /* try next path */
+      }
+    }
+    if (!palkaGltf) {
+      throw new Error(`none of: ${PALKANEW_MODEL_PATHS.join(", ")}`);
+    }
+    const palkaRoot = palkaGltf.scene;
+    palkaRoot.traverse((o) => {
       if (o.isMesh) {
+        if (o.name === PALKANEW_SPHERE_NAME) return;
         o.renderOrder = 9;
+        o.frustumCulled = false;
         const mats = Array.isArray(o.material) ? o.material : [o.material];
         const next = mats.map((mat) => {
           return new THREE.MeshBasicMaterial({
@@ -436,32 +466,62 @@ async function loadThreeBackgroundLayers() {
         o.material = next.length === 1 ? next[0] : next;
       }
     });
-    let cubeBox = new THREE.Box3().setFromObject(cubeRoot);
-    const cubeCenter = new THREE.Vector3();
-    cubeBox.getCenter(cubeCenter);
-    cubeRoot.position.sub(cubeCenter);
-    cubeBox.setFromObject(cubeRoot);
-    cubeRoot.position.y -= cubeBox.min.y;
-    cubeBox.setFromObject(cubeRoot);
-    const cubeH = cubeBox.max.y - cubeBox.min.y;
-    cubeRoot.scale.setScalar(
-      FLOOR_CUBE_TARGET_HEIGHT / Math.max(cubeH, 1e-6),
-    );
-    cubeBox.setFromObject(cubeRoot);
-    cubeRoot.position.y -= cubeBox.min.y;
 
-    const cubePivot = new THREE.Group();
-    cubePivot.add(cubeRoot);
-    cubePivot.renderOrder = 9;
-    threeScene.add(cubePivot);
+    const sphere = palkaRoot.getObjectByName(PALKANEW_SPHERE_NAME);
+    palkanewSphereMesh = null;
+    if (sphere && sphere.isMesh) {
+      sphere.renderOrder = 9;
+      sphere.frustumCulled = false;
+      const smats = Array.isArray(sphere.material)
+        ? sphere.material
+        : [sphere.material];
+      const stdMats = smats.map(
+        (mat) =>
+          new THREE.MeshStandardMaterial({
+            map: mat.map ?? null,
+            color: mat.color ? mat.color.clone() : new THREE.Color(0xffffff),
+            roughness: 0.4,
+            metalness: 0.05,
+            transparent: mat.transparent === true,
+            opacity: mat.opacity ?? 1,
+            emissive: new THREE.Color(PALKANEW_SPHERE_EMISSIVE),
+            emissiveIntensity: 1.5,
+          }),
+      );
+      sphere.material = stdMats.length === 1 ? stdMats[0] : stdMats;
+      palkanewSphereMesh = sphere;
+    }
+    let palkaBox = new THREE.Box3().setFromObject(palkaRoot);
+    const palkaCenter = new THREE.Vector3();
+    palkaBox.getCenter(palkaCenter);
+    palkaRoot.position.sub(palkaCenter);
+    palkaBox.setFromObject(palkaRoot);
+    palkaRoot.position.y -= palkaBox.min.y;
+    palkaBox.setFromObject(palkaRoot);
+    const palkaH = palkaBox.max.y - palkaBox.min.y;
+    palkaRoot.scale.setScalar(
+      PALKANEW_TARGET_HEIGHT / Math.max(palkaH, 1e-6),
+    );
+    palkaBox.setFromObject(palkaRoot);
+    palkaRoot.position.y -= palkaBox.min.y;
+
+    const palkaPivot = new THREE.Group();
+    palkaPivot.add(palkaRoot);
+    palkaPivot.renderOrder = 9;
+    threeScene.add(palkaPivot);
     placePivotBottomOnFloorAt(
-      cubePivot,
-      FLOOR_CUBE_X,
+      palkaPivot,
+      PALKANEW_X,
       THREE_FOREGROUND_Z,
       THREE_FLOOR_Y,
     );
+
+    palkanewMotionRoot = palkaRoot;
+
+    console.info("Palkanew loaded:", palkaLoadedPath, "at", PALKANEW_X);
   } catch (err) {
-    console.warn("Floor cube not loaded:", FLOOR_CUBE_MODEL_PATH, err);
+    palkanewMotionRoot = null;
+    console.error("Palkanew model not loaded:", err);
   }
 
   const branchPivot = new THREE.Group();
@@ -646,6 +706,7 @@ async function loadThreeBackgroundLayers() {
       STEBEL_Z,
       THREE_FLOOR_Y,
     );
+
     console.info("Stebel loaded:", stebelLoadedPath, "at", STEBEL_X, STEBEL_Z);
   } catch (err) {
     console.error("Stebel model not loaded:", err);
@@ -850,6 +911,33 @@ app.ticker.add(() => {
   }
 
   tickThreeParticles(deltaSeconds, sceneTime);
+
+  if (palkanewMotionRoot) {
+    const time = sceneTime * PALKANEW_SWAY.freq;
+    const y = PALKANEW_TARGET_HEIGHT;
+    const s = PALKANEW_SWAY;
+    const bendX =
+      Math.sin(time + y * 2) * s.leanX +
+      Math.sin(time * 0.5 + y * 5) * (s.leanX * 0.5);
+    const bendZ =
+      Math.sin(time * 0.97 + y * 2.1) * s.leanZ +
+      Math.sin(time * 0.53 + y * 4.9) * (s.leanZ * 0.5);
+    palkanewMotionRoot.rotation.x = bendX;
+    palkanewMotionRoot.rotation.z = bendZ;
+  }
+
+  if (palkanewSphereMesh) {
+    const mats = Array.isArray(palkanewSphereMesh.material)
+      ? palkanewSphereMesh.material
+      : [palkanewSphereMesh.material];
+    const t = performance.now() * 0.001;
+    const pulse = 1 + Math.sin(t * 3) * 0.5;
+    for (const m of mats) {
+      if (m && "emissiveIntensity" in m) {
+        m.emissiveIntensity = pulse;
+      }
+    }
+  }
 
   if (threeComposer) {
     threeComposer.render(deltaSeconds);
